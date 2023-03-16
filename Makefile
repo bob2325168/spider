@@ -5,7 +5,7 @@ VERSION := v1.0.0
 
 CHANNEL := $(shell git rev-parse --abbrev-ref HEAD)
 CHANNEL_BUILD = $(CHANNEL)-$(shell git rev-parse --short=7 HEAD)
-project=github.com/dreamerjackson/crawler
+project=github.com/bob2325168/spider
 
 LDFLAGS = -X "main.BuildTS=$(shell date -u '+%Y-%m-%d %I:%M:%S')"
 LDFLAGS += -X "main.GitHash=$(shell git rev-parse HEAD)"

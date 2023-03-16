@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/bob2325168/spider/extension"
 	"github.com/bob2325168/spider/proxy"
+	"github.com/bob2325168/spider/spider"
 	"go.uber.org/zap"
 	"golang.org/x/net/html/charset"
 	"golang.org/x/text/encoding"
@@ -15,14 +16,9 @@ import (
 	"time"
 )
 
-type Fetcher interface {
-	Get(url *Request) ([]byte, error)
-}
+type BaseFetch struct{}
 
-type BaseFetch struct {
-}
-
-func (BaseFetch) Get(req *Request) ([]byte, error) {
+func (bf *BaseFetch) Get(req *spider.Request) ([]byte, error) {
 	resp, err := http.Get(req.URL)
 
 	if err != nil {
@@ -47,26 +43,28 @@ type BrowserFetch struct {
 }
 
 // Get 模拟浏览器访问
-func (b *BrowserFetch) Get(request *Request) ([]byte, error) {
+func (b *BrowserFetch) Get(req *spider.Request) ([]byte, error) {
 
 	client := &http.Client{
 		Timeout: b.Timeout,
 	}
+
+	// 设置反向代理
 	if b.Proxy != nil {
 		transport := http.DefaultTransport.(*http.Transport)
 		transport.Proxy = b.Proxy
 		client.Transport = transport
 	}
-	req, err := http.NewRequest("GET", request.URL, nil)
+	r, err := http.NewRequest("GET", req.URL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("get url failed:%v", err)
 	}
 	// 验证cookie
-	if len(request.Task.Cookie) > 0 {
-		req.Header.Set("Cookie", request.Task.Cookie)
+	if len(req.Task.Cookie) > 0 {
+		r.Header.Set("Cookie", req.Task.Cookie)
 	}
-	req.Header.Set("User-Agent", extension.GenerateRandomUA())
-	resp, err := client.Do(req)
+	r.Header.Set("User-Agent", extension.GenerateRandomUA())
+	resp, err := client.Do(r)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +78,6 @@ func (b *BrowserFetch) Get(request *Request) ([]byte, error) {
 func DetermineEncoding(r *bufio.Reader) encoding.Encoding {
 
 	bytes, err := r.Peek(1024)
-
 	if err != nil {
 		zap.L().Error("fetch failed", zap.Error(err))
 		return unicode.UTF8

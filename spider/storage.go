@@ -1,7 +1,12 @@
-package storage
+package spider
+
+type Storage interface {
+	Save(ds ...*DataCell) error
+}
 
 type DataCell struct {
 	Data map[string]interface{}
+	Task *Task
 }
 
 func (d *DataCell) GetTableName() string {
@@ -10,8 +15,4 @@ func (d *DataCell) GetTableName() string {
 
 func (d *DataCell) GetTaskName() string {
 	return d.Data["Task"].(string)
-}
-
-type Storage interface {
-	Save(ds ...*DataCell) error
 }

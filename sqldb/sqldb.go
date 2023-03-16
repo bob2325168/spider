@@ -111,3 +111,17 @@ func (d *Sqldb) Insert(t TableData) error {
 
 	return err
 }
+
+func (d *Sqldb) DropTable(t TableData) error {
+	if len(t.ColumnNames) == 0 {
+		return errors.New("column can not be empty")
+	}
+
+	sql := `DROP TABLE ` + t.TableName
+
+	d.logger.Debug("drop table", zap.String("sql", sql))
+
+	_, err := d.db.Exec(sql)
+
+	return err
+}

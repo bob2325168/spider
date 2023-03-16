@@ -2,31 +2,33 @@ package sqlstorage
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"github.com/bob2325168/spider/engine"
+	"github.com/bob2325168/spider/spider"
 	"github.com/bob2325168/spider/sqldb"
-	"github.com/bob2325168/spider/storage"
 	"go.uber.org/zap"
 )
 
 type SqlStore struct {
-	dataCell    []*storage.DataCell
-	columnNames []sqldb.Field
-	db          sqldb.DBer
-	Table       map[string]struct{}
+	// 缓存输出的结果
+	dataCell []*spider.DataCell
+	db       sqldb.DBer
+	Table    map[string]struct{}
 
 	options
 }
 
-func NewSqlStore(opts ...Option) (*SqlStore, error) {
+func New(opts ...Option) (*SqlStore, error) {
 
 	option := defaultOption
 	for _, opt := range opts {
 		opt(&option)
 	}
+
 	s := &SqlStore{}
 	s.options = option
 	s.Table = make(map[string]struct{})
+
 	var err error
 	s.db, err = sqldb.New(
 		sqldb.WithLogger(s.logger),
@@ -38,7 +40,7 @@ func NewSqlStore(opts ...Option) (*SqlStore, error) {
 	return s, nil
 }
 
-func (s *SqlStore) Save(dataCells ...*storage.DataCell) error {
+func (s *SqlStore) Save(dataCells ...*spider.DataCell) error {
 
 	for _, cell := range dataCells {
 		tableName := cell.GetTableName()
@@ -52,19 +54,21 @@ func (s *SqlStore) Save(dataCells ...*storage.DataCell) error {
 			})
 			if err != nil {
 				s.logger.Error("create table failed", zap.Error(err))
-				return err
+				continue
 			}
 			s.Table[tableName] = struct{}{}
 		}
 		if len(s.dataCell) >= s.BatchCount {
-			s.Flush()
+			if err := s.FlushData(); err != nil {
+				s.logger.Error("insert data failed", zap.Error(err))
+			}
 		}
 		s.dataCell = append(s.dataCell, cell)
 	}
 	return nil
 }
 
-func getFields(cell *storage.DataCell) []sqldb.Field {
+func getFields(cell *spider.DataCell) []sqldb.Field {
 
 	taskName := cell.Data["Task"].(string)
 	ruleName := cell.Data["Rule"].(string)
@@ -84,19 +88,29 @@ func getFields(cell *storage.DataCell) []sqldb.Field {
 	return columnNames
 }
 
-func (s *SqlStore) Flush() error {
+func (s *SqlStore) FlushData() error {
 
-	s.logger.Info(fmt.Sprintf("flushing data: %d", len(s.dataCell)))
 	if len(s.dataCell) == 0 {
 		return nil
 	}
+
 	args := make([]interface{}, 0)
-	for _, datacell := range s.dataCell {
-		ruleName := datacell.Data["Rule"].(string)
-		taskName := datacell.Data["Task"].(string)
+	var ruleName string
+	var taskName string
+	var ok bool
+
+	for _, cell := range s.dataCell {
+		if ruleName, ok = cell.Data["Rule"].(string); !ok {
+			return errors.New("no rule field")
+		}
+		if taskName, ok = cell.Data["Task"].(string); !ok {
+			return errors.New("no task field")
+		}
 		fields := engine.GetFields(taskName, ruleName)
-		data := datacell.Data["Data"].(map[string]interface{})
+
+		data := cell.Data["Data"].(map[string]any)
 		var value []string
+
 		for _, field := range fields {
 			v := data[field]
 			switch v := v.(type) {
@@ -113,7 +127,12 @@ func (s *SqlStore) Flush() error {
 				}
 			}
 		}
-		value = append(value, datacell.Data["URL"].(string), datacell.Data["Time"].(string))
+		if v, ok := cell.Data["URL"].(string); ok {
+			value = append(value, v)
+		}
+		if v, ok := cell.Data["Time"].(string); ok {
+			value = append(value, v)
+		}
 		for _, v := range value {
 			args = append(args, v)
 		}

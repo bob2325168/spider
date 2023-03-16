@@ -18,7 +18,7 @@ func WithLogger(logger *zap.Logger) Option {
 	}
 }
 
-func WithSql(sqlURL string) Option {
+func WithSqlURL(sqlURL string) Option {
 	return func(opts *options) {
 		opts.sqlURL = sqlURL
 	}

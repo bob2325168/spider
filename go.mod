@@ -3,10 +3,12 @@ module github.com/bob2325168/spider
 go 1.18
 
 require (
+	github.com/go-micro/plugins/v4/config/encoder/toml v1.2.0
 	github.com/go-micro/plugins/v4/registry/etcd v1.2.0
 	github.com/go-micro/plugins/v4/server/grpc v1.2.0
 	github.com/go-sql-driver/mysql v1.7.0
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.15.2
+	github.com/pelletier/go-toml v1.8.1
 	github.com/robertkrimen/otto v0.2.1
 	github.com/stretchr/testify v1.8.2
 	go-micro.dev/v4 v4.9.0
@@ -21,6 +23,7 @@ require (
 )
 
 require (
+	github.com/BurntSushi/toml v0.3.1 // indirect
 	github.com/Microsoft/go-winio v0.5.0 // indirect
 	github.com/ProtonMail/go-crypto v0.0.0-20210428141323-04723f9f07d7 // indirect
 	github.com/acomagu/bufpipe v1.0.3 // indirect

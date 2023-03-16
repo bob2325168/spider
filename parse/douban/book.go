@@ -1,14 +1,17 @@
 package douban
 
 import (
-	"github.com/bob2325168/spider/collect"
+	"github.com/bob2325168/spider/limiter"
+	"github.com/bob2325168/spider/spider"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 	"regexp"
 	"strconv"
+	"time"
 )
 
-var DoubanBookTask = &collect.Task{
-	Property: collect.Property{
+var BookTask = &spider.Task{
+	Options: spider.Options{
 		Name:     "douban_book_list",
 		WaitTime: 2,
 		MaxDepth: 5,
@@ -17,10 +20,15 @@ var DoubanBookTask = &collect.Task{
 			"__utmv=30149280.21428; ck=SAvm; _pk_ref.100001.8cb4=%5B%22%22%2C%22%22%2C1665925405%2C%22https%3A%2F%2Faccounts.douban.com%2F%22%5D; _pk_ses.100001.8cb4=*; " +
 			"__utma=30149280.2072705865.1665849857.1665849857.1665925407.2; __utmc=30149280; __utmt=1; __utmb=30149280.23.5.1665925419338;" +
 			" _pk_id.100001.8cb4=fc1581490bf2b70c.1665849856.2.1665925421.1665849856.",
+		Reload: true,
+		Limiter: limiter.Multi(
+			rate.NewLimiter(limiter.Per(1, 3*time.Second), 1),
+			rate.NewLimiter(limiter.Per(20, 60*time.Second), 20),
+		),
 	},
-	Rule: collect.RuleTree{
-		Root: func() ([]*collect.Request, error) {
-			roots := []*collect.Request{
+	Rule: spider.RuleTree{
+		Root: func() ([]*spider.Request, error) {
+			roots := []*spider.Request{
 				{
 					Priority: 1,
 					URL:      "https://book.douban.com",
@@ -30,7 +38,7 @@ var DoubanBookTask = &collect.Task{
 			}
 			return roots, nil
 		},
-		Trunk: map[string]*collect.Rule{
+		Trunk: map[string]*spider.Rule{
 			"数据tag": {ParseFunc: ParseTag},
 			"书籍列表":  {ParseFunc: ParseBookList},
 			"书籍简介": {
@@ -51,15 +59,15 @@ var DoubanBookTask = &collect.Task{
 
 const regexpStr = `<a href="([^"]+)" class="tag">([^<]+)</a>`
 
-func ParseTag(ctx *collect.Context) (collect.ParseResult, error) {
+func ParseTag(ctx *spider.Context) (spider.ParseResult, error) {
 	re := regexp.MustCompile(regexpStr)
 
 	matches := re.FindAllSubmatch(ctx.Body, -1)
-	result := collect.ParseResult{}
+	result := spider.ParseResult{}
 
 	for _, m := range matches {
 		result.Requests = append(
-			result.Requests, &collect.Request{
+			result.Requests, &spider.Request{
 				Method:   "GET",
 				Task:     ctx.Req.Task,
 				URL:      "https://book.douban.com" + string(m[1]),
@@ -73,12 +81,12 @@ func ParseTag(ctx *collect.Context) (collect.ParseResult, error) {
 
 const BooklistRe = `<a.*?href="([^"]+)" title="([^"]+)"`
 
-func ParseBookList(ctx *collect.Context) (collect.ParseResult, error) {
+func ParseBookList(ctx *spider.Context) (spider.ParseResult, error) {
 	re := regexp.MustCompile(BooklistRe)
 	matches := re.FindAllSubmatch(ctx.Body, -1)
-	result := collect.ParseResult{}
+	result := spider.ParseResult{}
 	for _, m := range matches {
-		req := &collect.Request{
+		req := &spider.Request{
 			Method:   "GET",
 			Task:     ctx.Req.Task,
 			URL:      string(m[1]),
@@ -86,7 +94,7 @@ func ParseBookList(ctx *collect.Context) (collect.ParseResult, error) {
 			RuleName: "书籍简介",
 			Priority: 100,
 		}
-		req.TmpData = &collect.Temp{}
+		req.TmpData = &spider.Temp{}
 		if err := req.TmpData.Set("book_name", string(m[2])); err != nil {
 			zap.L().Error("set temdata failed", zap.Error(err))
 		}
@@ -103,7 +111,7 @@ var priceRe = regexp.MustCompile(`<span class="pl">定价:</span>([^<]+)<br/>`)
 var scoreRe = regexp.MustCompile(`<strong class="ll rating_num " property="v:average">([^<]+)</strong>`)
 var intoRe = regexp.MustCompile(`<div class="intro">[\d\D]*?<p>([^<]+)</p></div>`)
 
-func ParseBookDetail(ctx *collect.Context) (collect.ParseResult, error) {
+func ParseBookDetail(ctx *spider.Context) (spider.ParseResult, error) {
 	bookName := ctx.Req.TmpData.Get("book_name")
 	page, _ := strconv.Atoi(ExtraString(ctx.Body, pageRe))
 
@@ -118,7 +126,7 @@ func ParseBookDetail(ctx *collect.Context) (collect.ParseResult, error) {
 	}
 	data := ctx.Output(book)
 
-	result := collect.ParseResult{
+	result := spider.ParseResult{
 		Items: []interface{}{data},
 	}
 	zap.S().Debugln("parse book detail", data)
