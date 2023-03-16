@@ -1,7 +1,7 @@
 package douban
 
 import (
-	"github.com/bob2325168/spider/limiter"
+	"github.com/bob2325168/spider/middlewares/limiter"
 	"github.com/bob2325168/spider/spider"
 	"go.uber.org/zap"
 	"golang.org/x/time/rate"
@@ -15,12 +15,8 @@ var BookTask = &spider.Task{
 		Name:     "douban_book_list",
 		WaitTime: 2,
 		MaxDepth: 5,
-		Cookie: "bid=-UXUw--yL5g; dbcl2=\"214281202:q0BBm9YC2Yg\"; __yadk_uid=jigAbrEOKiwgbAaLUt0G3yPsvehXcvrs; " +
-			"push_noty_num=0; push_doumail_num=0; __utmz=30149280.1665849857.1.1.utmcsr=accounts.douban.com|utmccn=(referral)|utmcmd=referral|utmcct=/; " +
-			"__utmv=30149280.21428; ck=SAvm; _pk_ref.100001.8cb4=%5B%22%22%2C%22%22%2C1665925405%2C%22https%3A%2F%2Faccounts.douban.com%2F%22%5D; _pk_ses.100001.8cb4=*; " +
-			"__utma=30149280.2072705865.1665849857.1665849857.1665925407.2; __utmc=30149280; __utmt=1; __utmb=30149280.23.5.1665925419338;" +
-			" _pk_id.100001.8cb4=fc1581490bf2b70c.1665849856.2.1665925421.1665849856.",
-		Reload: true,
+		Cookie:   "__Secure-3PAPISID=syRZh49k3Ly4GbH3/AOnbR3RsAI0yA8PDW; __Secure-3PSID=Twhd6jxVkHKO2ttDC0GLtozGuZdvukYa8gfvQ60Z38cf_DgXtxhCGUNKbE0uZnqBJp9INw.; 1P_JAR=2023-03-16-07; NID=511=nY--paEemdRdrxnDh45vRVS9CwdCxWrAB_WcGd881Noe38RsZgIe6O0alR-37fe7S1BmOGQhtUtBOjrlfdwJqD9GCobLvAdAZyHarnyVHoF9bITePzu_z2tgdu-82nVgorFtsksZ7lrJaS6pVljyG3wuyE-LWmV3rFnHns8cqgvEz0xnwTwgNsb-bUoJtXxHEc4kSyThUcIzPSgAIbO06Ae8-3RlViW5HT1dYKkHI1mIG-z1m9bIZNj_-NwRYljwZQs3YtOsN1xiJtFe4aXtNXiLc-1JNcHl2lHncjIRzuzrO7rTkqNwrUXJ; __Secure-3PSIDCC=AFvIBn9ifnhgfsJGfVreP-uldS_QSO5ydc1vRUCNQO4xgJgVl6UwYrCbK-CJVpXThvRKf7q3FA",
+		Reload:   true,
 		Limiter: limiter.Multi(
 			rate.NewLimiter(limiter.Per(1, 3*time.Second), 1),
 			rate.NewLimiter(limiter.Per(20, 60*time.Second), 20),

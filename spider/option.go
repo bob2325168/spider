@@ -1,7 +1,7 @@
 package spider
 
 import (
-	"github.com/bob2325168/spider/limiter"
+	"github.com/bob2325168/spider/middlewares/limiter"
 	"go.uber.org/zap"
 )
 

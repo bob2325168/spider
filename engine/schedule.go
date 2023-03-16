@@ -1,10 +1,10 @@
 package engine
 
 import (
-	"github.com/bob2325168/spider/parse/douban"
-	"github.com/bob2325168/spider/parse/doubangroup"
-	"github.com/bob2325168/spider/parse/doubangroupjs"
 	"github.com/bob2325168/spider/spider"
+	"github.com/bob2325168/spider/task/douban"
+	"github.com/bob2325168/spider/task/doubangroup"
+	"github.com/bob2325168/spider/task/doubangroupjs"
 	"github.com/robertkrimen/otto"
 	"go.uber.org/zap"
 	"runtime/debug"
@@ -67,10 +67,28 @@ func (c *CrawlerStore) Add(task *spider.Task) {
 	c.list = append(c.list, task)
 }
 
+// AddJsReq 用于动态规则添加请求。
+func AddJsReq(jreq map[string]interface{}) []*spider.Request {
+
+	reqs := make([]*spider.Request, 0)
+	req := &spider.Request{}
+	u, ok := jreq["URL"].(string)
+	if !ok {
+		return nil
+	}
+
+	req.URL = u
+	req.RuleName, _ = jreq["RuleName"].(string)
+	req.Method, _ = jreq["Method"].(string)
+	req.Priority, _ = jreq["Priority"].(int64)
+	reqs = append(reqs, req)
+
+	return reqs
+}
+
 func AddJsReqs(jsreqs []map[string]interface{}) []*spider.Request {
 
 	reqs := make([]*spider.Request, 0)
-
 	for _, jreq := range jsreqs {
 		req := &spider.Request{}
 		u, ok := jreq["URL"].(string)
@@ -89,7 +107,6 @@ func AddJsReqs(jsreqs []map[string]interface{}) []*spider.Request {
 func (c *CrawlerStore) AddJsTask(m *spider.TaskModule) {
 
 	task := &spider.Task{}
-
 	task.Rule.Root = func() ([]*spider.Request, error) {
 		vm := otto.New()
 		if err := vm.Set("AddJsReq", AddJsReqs); err != nil {
@@ -307,7 +324,6 @@ func (c *Crawler) HandleResult() {
 
 	for result := range c.out {
 		for _, item := range result.Items {
-			//存入sql
 			switch d := item.(type) {
 			case *spider.DataCell:
 				if err := d.Task.Storage.Save(d); err != nil {

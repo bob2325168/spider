@@ -8,7 +8,6 @@ require (
 	github.com/go-micro/plugins/v4/server/grpc v1.2.0
 	github.com/go-sql-driver/mysql v1.7.0
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.15.2
-	github.com/pelletier/go-toml v1.8.1
 	github.com/robertkrimen/otto v0.2.1
 	github.com/stretchr/testify v1.8.2
 	go-micro.dev/v4 v4.9.0

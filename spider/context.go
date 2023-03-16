@@ -52,7 +52,9 @@ func (ctx *Context) OutputJs(reg string) ParseResult {
 }
 
 func (ctx *Context) Output(data interface{}) *DataCell {
-	res := &DataCell{}
+	res := &DataCell{
+		Task: ctx.Req.Task,
+	}
 	res.Data = make(map[string]interface{})
 	res.Data["Task"] = ctx.Req.Task.Name
 	res.Data["Rule"] = ctx.Req.RuleName

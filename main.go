@@ -5,18 +5,19 @@ import (
 	"flag"
 	"fmt"
 	"github.com/bob2325168/spider/collect"
+	sqlstorage2 "github.com/bob2325168/spider/db/storage/sqlstorage"
 	"github.com/bob2325168/spider/engine"
-	"github.com/bob2325168/spider/limiter"
-	"github.com/bob2325168/spider/logger"
+	"github.com/bob2325168/spider/middlewares/limiter"
+	"github.com/bob2325168/spider/middlewares/logger"
 	gt "github.com/bob2325168/spider/proto/greeter"
 	"github.com/bob2325168/spider/proxy"
 	"github.com/bob2325168/spider/spider"
-	"github.com/bob2325168/spider/storage/sqlstorage"
 	"github.com/go-micro/plugins/v4/config/encoder/toml"
 	etcdReg "github.com/go-micro/plugins/v4/registry/etcd"
 	gs "github.com/go-micro/plugins/v4/server/grpc"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"go-micro.dev/v4"
+	"go-micro.dev/v4/client"
 	"go-micro.dev/v4/config"
 	"go-micro.dev/v4/config/reader"
 	"go-micro.dev/v4/config/reader/json"
@@ -103,10 +104,10 @@ func main() {
 
 	// 设置存储
 	sqlURL := cfg.Get("storage", "sqlURL").String("")
-	if store, err = sqlstorage.New(
-		sqlstorage.WithSqlURL(sqlURL),
-		sqlstorage.WithLogger(log.Named("sqlDB")),
-		sqlstorage.WithBatchCount(2),
+	if store, err = sqlstorage2.New(
+		sqlstorage2.WithSqlURL(sqlURL),
+		sqlstorage2.WithLogger(log.Named("sqlDB")),
+		sqlstorage2.WithBatchCount(2),
 	); err != nil {
 		log.Error("create sqlstorage failed", zap.Error(err))
 		return
@@ -167,11 +168,11 @@ func runGRPCServer(logger *zap.Logger, cfg ServerConfig) {
 		micro.WrapHandler(logWrapper(logger)),
 	)
 
-	////设置micro客户端默认超时时间
-	//if err := service.Client().Init(client.RequestTimeout(time.Duration(cfg.ClientTimeOut) * time.Second)); err != nil {
-	//	logger.Sugar().Error("micro client init error", zap.String("error:", err.Error()))
-	//	return
-	//}
+	//设置micro客户端默认超时时间
+	if err := service.Client().Init(client.RequestTimeout(time.Duration(cfg.ClientTimeOut) * time.Second)); err != nil {
+		logger.Sugar().Error("micro client init error", zap.String("error:", err.Error()))
+		return
+	}
 	service.Init()
 
 	if err := gt.RegisterGreeterHandler(service.Server(), new(Greeter)); err != nil {
