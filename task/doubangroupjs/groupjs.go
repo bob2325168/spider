@@ -1,6 +1,8 @@
 package doubangroupjs
 
-import "github.com/bob2325168/spider/spider"
+import (
+	"github.com/bob2325168/spider/spider"
+)
 
 var GroupJSTask = &spider.TaskModule{
 	Property: spider.Property{

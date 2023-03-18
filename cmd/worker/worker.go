@@ -11,7 +11,7 @@ import (
 	"github.com/bob2325168/spider/proxy"
 	"github.com/bob2325168/spider/spider"
 	"github.com/go-micro/plugins/v4/config/encoder/toml"
-	etcdReg "github.com/go-micro/plugins/v4/registry/etcd"
+	"github.com/go-micro/plugins/v4/registry/etcd"
 	gs "github.com/go-micro/plugins/v4/server/grpc"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/spf13/cobra"
@@ -78,7 +78,6 @@ func run() {
 	if logLevel, err = zapcore.ParseLevel(logText); err != nil {
 		panic(err)
 	}
-
 	plugin := logger.NewStdoutPlugin(logLevel)
 	log = logger.NewLogger(plugin)
 	log.Info("log init end")
@@ -114,13 +113,13 @@ func run() {
 	}
 
 	// 初始化task
-	var tcfg []spider.TaskConfig
-	if err := cfg.Get("Tasks").Scan(&tcfg); err != nil {
+	var tCfg []spider.TaskConfig
+	if err := cfg.Get("Tasks").Scan(&tCfg); err != nil {
 		log.Error("init seed tasks", zap.Error(err))
 	}
-	seeds := parseTaskConfig(log, f, store, tcfg)
+	seeds := parseTaskConfig(log, f, store, tCfg)
 
-	s := engine.NewEngine(
+	engine.NewEngine(
 		engine.WithFetcher(f),
 		engine.WithLogger(log),
 		engine.WithWorkCount(5),
@@ -128,20 +127,28 @@ func run() {
 		engine.WithScheduler(engine.NewSchedule()),
 	)
 
-	// 启动worker
-	go s.Run()
+	//s := engine.NewEngine(
+	//	engine.WithFetcher(f),
+	//	engine.WithLogger(log),
+	//	engine.WithWorkCount(5),
+	//	engine.WithSeeds(seeds),
+	//	engine.WithScheduler(engine.NewSchedule()),
+	//)
 
-	var sconfig ServerConfig
-	if err := cfg.Get("WorkerServer").Scan(&sconfig); err != nil {
+	// 启动worker
+	//go s.Run()
+
+	var sConfig ServerConfig
+	if err := cfg.Get("WorkerServer").Scan(&sConfig); err != nil {
 		log.Error("get worker server grpc server config failed", zap.Error(err))
 	}
-	log.Sugar().Debugf("worker server grpc server config, %+v", sconfig)
+	log.Sugar().Debugf("worker server grpc server config, %+v", sConfig)
 
 	// 启动http proxy to grpc
-	go runHTTPServer(sconfig)
+	go runHTTPServer(sConfig)
 
 	// 启动grpc服务器
-	runGRPCServer(log, sconfig)
+	runGRPCServer(log, sConfig)
 }
 
 type ServerConfig struct {
@@ -154,7 +161,7 @@ type ServerConfig struct {
 
 func runGRPCServer(logger *zap.Logger, cfg ServerConfig) {
 
-	reg := etcdReg.NewRegistry(registry.Addrs(cfg.RegistryAddress))
+	reg := etcd.NewRegistry(registry.Addrs(cfg.RegistryAddress))
 	service := micro.NewService(
 		micro.Server(gs.NewServer(server.Id(workerId))),
 		micro.Address(GRPCListenAddress),
@@ -188,6 +195,7 @@ func runHTTPServer(cfg ServerConfig) {
 	defer cancel()
 
 	mux := runtime.NewServeMux()
+
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	}

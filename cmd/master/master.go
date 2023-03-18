@@ -2,16 +2,13 @@ package master
 
 import (
 	"context"
-	"github.com/bob2325168/spider/collect"
-	sqlstorage2 "github.com/bob2325168/spider/db/storage/sqlstorage"
-	"github.com/bob2325168/spider/engine"
+	"github.com/bob2325168/spider/master"
 	"github.com/bob2325168/spider/middlewares/limiter"
 	"github.com/bob2325168/spider/middlewares/logger"
 	gt "github.com/bob2325168/spider/proto/greeter"
-	"github.com/bob2325168/spider/proxy"
 	"github.com/bob2325168/spider/spider"
 	"github.com/go-micro/plugins/v4/config/encoder/toml"
-	etcdReg "github.com/go-micro/plugins/v4/registry/etcd"
+	"github.com/go-micro/plugins/v4/registry/etcd"
 	gs "github.com/go-micro/plugins/v4/server/grpc"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/spf13/cobra"
@@ -54,11 +51,10 @@ var Cmd = &cobra.Command{
 }
 
 func run() {
+
 	var (
 		err      error
 		log      *zap.Logger
-		p        proxy.Func
-		store    spider.Storage
 		logLevel zapcore.Level
 	)
 
@@ -77,7 +73,6 @@ func run() {
 	if logLevel, err = zapcore.ParseLevel(logText); err != nil {
 		panic(err)
 	}
-
 	plugin := logger.NewStdoutPlugin(logLevel)
 	log = logger.NewLogger(plugin)
 	log.Info("log init end")
@@ -85,62 +80,26 @@ func run() {
 	// 设置zap全局的logger
 	zap.ReplaceGlobals(log)
 
-	// 设置fetcher
-	proxyURLs := cfg.Get("fetcher", "proxy").StringSlice([]string{})
-	timeout := cfg.Get("fetcher", "timeout").Int(5000)
-	log.Sugar().Info("proxy list: ", proxyURLs, " timeout: ", timeout)
-
-	if p, err = proxy.RoundRobinProxySwitcher(proxyURLs...); err != nil {
-		log.Error("roundRobinProxySwitcher failed")
-		return
-	}
-
-	var f spider.Fetcher = &collect.BrowserFetch{
-		Timeout: time.Duration(timeout) * time.Millisecond,
-		Proxy:   p,
-		Logger:  log,
-	}
-
-	// 设置存储
-	sqlURL := cfg.Get("storage", "sqlURL").String("")
-	if store, err = sqlstorage2.New(
-		sqlstorage2.WithSqlURL(sqlURL),
-		sqlstorage2.WithLogger(log.Named("sqlDB")),
-		sqlstorage2.WithBatchCount(2),
-	); err != nil {
-		log.Error("create sqlstorage failed", zap.Error(err))
-		return
-	}
-
-	// 初始化task
-	var tcfg []spider.TaskConfig
-	if err := cfg.Get("Tasks").Scan(&tcfg); err != nil {
-		log.Error("init seed tasks", zap.Error(err))
-	}
-	seeds := parseTaskConfig(log, f, store, tcfg)
-
-	s := engine.NewEngine(
-		engine.WithFetcher(f),
-		engine.WithLogger(log),
-		engine.WithWorkCount(5),
-		engine.WithSeeds(seeds),
-		engine.WithScheduler(engine.NewSchedule()),
-	)
-
-	// 启动worker
-	go s.Run()
-
-	var sconfig ServerConfig
-	if err := cfg.Get("MasterServer").Scan(&sconfig); err != nil {
+	var sConfig ServerConfig
+	if err := cfg.Get("MasterServer").Scan(&sConfig); err != nil {
 		log.Error("get master grpc server config failed", zap.Error(err))
 	}
-	log.Sugar().Debugf("master grpc server config, %+v", sconfig)
+	log.Sugar().Debugf("master grpc server config, %+v", sConfig)
+
+	reg := etcd.NewRegistry(registry.Addrs(sConfig.RegistryAddress))
+	master.New(
+		masterId,
+		master.WithLogger(log.Named("master")),
+		master.WithGRPCAddress(GRPCListenAddress),
+		master.WithregistryURL(sConfig.RegistryAddress),
+		master.WithRegistry(reg),
+	)
 
 	// 启动http proxy to grpc
-	go runHTTPServer(sconfig)
+	go runHTTPServer(sConfig)
 
 	// 启动grpc服务器
-	runGRPCServer(log, sconfig)
+	runGRPCServer(log, reg, sConfig)
 }
 
 type ServerConfig struct {
@@ -151,9 +110,8 @@ type ServerConfig struct {
 	ClientTimeOut    int
 }
 
-func runGRPCServer(logger *zap.Logger, cfg ServerConfig) {
+func runGRPCServer(logger *zap.Logger, reg registry.Registry, cfg ServerConfig) {
 
-	reg := etcdReg.NewRegistry(registry.Addrs(cfg.RegistryAddress))
 	service := micro.NewService(
 		micro.Server(gs.NewServer(server.Id(masterId))),
 		micro.Address(GRPCListenAddress),
