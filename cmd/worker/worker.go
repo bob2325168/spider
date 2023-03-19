@@ -2,6 +2,9 @@ package worker
 
 import (
 	"context"
+	"net/http"
+	"time"
+
 	"github.com/bob2325168/spider/collect"
 	sqlstorage2 "github.com/bob2325168/spider/db/storage/sqlstorage"
 	"github.com/bob2325168/spider/engine"
@@ -29,19 +32,19 @@ import (
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"net/http"
-	"time"
 )
 
 var ServiceName = "go.micro.server.worker"
 var workerId string
 var HTTPListenAddress string
 var GRPCListenAddress string
+var PProfListenAddress string
 
 func init() {
 	Cmd.Flags().StringVar(&workerId, "id", "1", "set master id")
 	Cmd.Flags().StringVar(&HTTPListenAddress, "http", ":8080", "set HTTP listen address")
 	Cmd.Flags().StringVar(&GRPCListenAddress, "grpc", ":9090", "set GRPC listen address")
+	Cmd.Flags().StringVar(&PProfListenAddress, "pprof", ":9981", "set pprof listen address")
 }
 
 var Cmd = &cobra.Command{
@@ -55,6 +58,13 @@ var Cmd = &cobra.Command{
 }
 
 func run() {
+
+	//go func() {
+	//	if err := http.ListenAndServe(PProfListenAddress, nil); err != nil {
+	//		panic(err)
+	//	}
+	//}()
+
 	var (
 		err      error
 		log      *zap.Logger
@@ -91,8 +101,7 @@ func run() {
 	log.Sugar().Info("proxy list: ", proxyURLs, " timeout: ", timeout)
 
 	if p, err = proxy.RoundRobinProxySwitcher(proxyURLs...); err != nil {
-		log.Error("roundRobinProxySwitcher failed")
-		return
+		log.Error("roundRobinProxySwitcher failed", zap.Error(err))
 	}
 
 	var f spider.Fetcher = &collect.BrowserFetch{
@@ -117,7 +126,8 @@ func run() {
 	if err := cfg.Get("Tasks").Scan(&tCfg); err != nil {
 		log.Error("init seed tasks", zap.Error(err))
 	}
-	seeds := parseTaskConfig(log, f, store, tCfg)
+
+	seeds := ParseTaskConfig(log, f, store, tCfg)
 
 	engine.NewEngine(
 		engine.WithFetcher(f),
@@ -126,14 +136,6 @@ func run() {
 		engine.WithSeeds(seeds),
 		engine.WithScheduler(engine.NewSchedule()),
 	)
-
-	//s := engine.NewEngine(
-	//	engine.WithFetcher(f),
-	//	engine.WithLogger(log),
-	//	engine.WithWorkCount(5),
-	//	engine.WithSeeds(seeds),
-	//	engine.WithScheduler(engine.NewSchedule()),
-	//)
 
 	// 启动worker
 	//go s.Run()
@@ -159,7 +161,7 @@ type ServerConfig struct {
 	ClientTimeOut    int
 }
 
-func runGRPCServer(logger *zap.Logger, cfg ServerConfig) {
+func runGRPCServer(log *zap.Logger, cfg ServerConfig) {
 
 	reg := etcd.NewRegistry(registry.Addrs(cfg.RegistryAddress))
 	service := micro.NewService(
@@ -169,27 +171,30 @@ func runGRPCServer(logger *zap.Logger, cfg ServerConfig) {
 		micro.RegisterTTL(time.Duration(cfg.RegisterTTL)*time.Second),
 		micro.RegisterInterval(time.Duration(cfg.RegisterInterval)*time.Second),
 		micro.Name(cfg.Name),
-		micro.WrapHandler(logWrapper(logger)),
+		micro.WrapHandler(logWrapper(log)),
 	)
 
-	//设置micro客户端默认超时时间
+	// 设置micro客户端默认超时时间
 	if err := service.Client().Init(client.RequestTimeout(time.Duration(cfg.ClientTimeOut) * time.Second)); err != nil {
-		logger.Sugar().Error("micro client init error", zap.String("error:", err.Error()))
+		log.Sugar().Error("micro client init error", zap.String("error:", err.Error()))
 		return
 	}
+
 	service.Init()
 
 	if err := gt.RegisterGreeterHandler(service.Server(), new(Greeter)); err != nil {
-		logger.Fatal("register handler failed")
+		log.Fatal("register handler failed", zap.Error(err))
 	}
 
 	//启动GRPC服务
 	if err := service.Run(); err != nil {
-		logger.Fatal("worker grpc server stop")
+		log.Fatal("worker grpc server stop", zap.Error(err))
 	}
+
 }
 
 func runHTTPServer(cfg ServerConfig) {
+
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -228,7 +233,7 @@ func logWrapper(log *zap.Logger) server.HandlerWrapper {
 }
 
 // 从配置文件中读取值
-func parseTaskConfig(log *zap.Logger, f spider.Fetcher,
+func ParseTaskConfig(log *zap.Logger, f spider.Fetcher,
 	s spider.Storage, cfgs []spider.TaskConfig) []*spider.Task {
 
 	tasks := make([]*spider.Task, 0, 1000)

@@ -2,8 +2,13 @@ package master
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"github.com/bob2325168/spider/cmd/worker"
+	proto "github.com/bob2325168/spider/proto/crawler"
+	"github.com/bwmarrin/snowflake"
 	"github.com/go-acme/lego/v4/log"
+	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/pkg/errors"
 	"go-micro.dev/v4/registry"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -11,16 +16,50 @@ import (
 	"go.uber.org/zap"
 	"net"
 	"reflect"
+	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
+)
+
+type Command int
+
+const (
+	MSGADD Command = iota
+	MSGDELETE
+)
+
+const (
+	RESOURCE_PATH = "/resources"
 )
 
 type Master struct {
 	Id          string
 	ready       int32
 	leaderId    string
-	workerNodes map[string]*registry.Node
+	workerNodes map[string]*NodeSpec
+	resources   map[string]*ResourceSpec
+	IdGen       *snowflake.Node
+	etcdCli     *clientv3.Client
+
 	options
+}
+
+type Message struct {
+	Cmd   Command
+	Specs []*ResourceSpec
+}
+
+type ResourceSpec struct {
+	Id           string
+	Name         string
+	AssignedNode string
+	CreatedTime  int64
+}
+
+type NodeSpec struct {
+	Node    *registry.Node
+	Payload int // 标识当前节点的负载
 }
 
 func New(id string, opts ...Option) (*Master, error) {
@@ -31,26 +70,88 @@ func New(id string, opts ...Option) (*Master, error) {
 		opt(&options)
 	}
 	m.options = options
+	m.resources = make(map[string]*ResourceSpec)
+
+	//使用snowflake算法生成id
+	node, err := snowflake.NewNode(1)
+	if err != nil {
+		return nil, err
+	}
+	m.IdGen = node
+
+	//获取本地服务的IP地址
 	ipv4, err := getLocalIP()
 	if err != nil {
 		return nil, err
 	}
+
+	// 生成masterId，全局唯一
 	m.Id = getMasterId(id, ipv4, m.GRPCAddress)
 	m.logger.Sugar().Debugln("master-id", m.Id)
-	go m.campaign()
-
-	return m, nil
-}
-
-func (m *Master) campaign() {
 
 	endpoints := []string{m.registryURL}
 	cli, err := clientv3.New(clientv3.Config{Endpoints: endpoints})
 	if err != nil {
-		panic(err)
+		return nil, err
+	}
+	m.etcdCli = cli
+
+	// 监听worker的变化以及安排任务
+	m.updateWorkerNodes()
+
+	// 添加爬虫资源
+	m.addSeed()
+
+	// 启动协程竞选Master
+	go m.campaign()
+
+	// 启动协程处理消息
+	go m.handleMessages()
+
+	return m, nil
+}
+
+/*
+资源管理
+*/
+func (m *Master) AddResource(ctx context.Context, req *proto.ResourceSpec, resp *proto.NodeSpec) error {
+
+	nodeSpec, err := m.addResource(&ResourceSpec{Name: req.Name})
+	if nodeSpec != nil {
+		resp.Id = nodeSpec.Node.Id
+		resp.Address = nodeSpec.Node.Address
+	}
+	return err
+}
+
+func (m *Master) DeleteResource(ctx context.Context, spec *proto.ResourceSpec, empty *empty.Empty) error {
+
+	r, ok := m.resources[spec.Name]
+	if !ok {
+		return errors.New("no such task")
 	}
 
-	sess, err := concurrency.NewSession(cli, concurrency.WithTTL(5))
+	if _, err := m.etcdCli.Delete(context.Background(), getResourcePath(spec.Name)); err != nil {
+		return err
+	}
+
+	if r.AssignedNode != "" {
+		nodeId, err := getNodeId(r.AssignedNode)
+		if err != nil {
+			return err
+		}
+
+		if ns, ok := m.workerNodes[nodeId]; ok {
+			ns.Payload--
+		}
+	}
+
+	return nil
+}
+
+func (m *Master) campaign() {
+
+	sess, err := concurrency.NewSession(m.etcdCli, concurrency.WithTTL(5))
 	if err != nil {
 		log.Println("NewSession", "error", "err", err)
 	}
@@ -60,8 +161,10 @@ func (m *Master) campaign() {
 	e := concurrency.NewElection(sess, "/resources/election")
 	leaderCh := make(chan error)
 	go m.elect(e, leaderCh)
+
 	// 监听leader的变化
 	leaderChange := e.Observe(context.Background())
+
 	select {
 	case resp := <-leaderChange:
 		m.logger.Info("watch leader change", zap.String("leader", string(resp.Kvs[0].Value)))
@@ -79,19 +182,33 @@ func (m *Master) campaign() {
 				m.logger.Info("master change to leader")
 				m.leaderId = m.Id
 				if !m.isLeader() {
-					m.selectedForLeader()
+					if err := m.selectedForLeader(); err != nil {
+						m.logger.Error("become leader failed", zap.Error(err))
+					}
 				}
 			}
+
 		// 监听当前集群中leader是否发生了变化
 		case resp := <-leaderChange:
+
 			if len(resp.Kvs) > 0 {
 				m.logger.Info("watch leader change", zap.String("leader:", string(resp.Kvs[0].Value)))
 			}
+
 		// 监听worker节点是否发生变化
 		case resp := <-workerNodeChange:
+
 			m.logger.Info("watch worker change", zap.Any("worker:", resp))
-			m.updateNodes()
+			m.updateWorkerNodes()
+
+			if err := m.loadResource(); err != nil {
+				m.logger.Error("loadResource failed:%w", zap.Error(err))
+			}
+
+			m.reAssign()
+
 		case <-time.After(20 * time.Second):
+
 			resp, err := e.Leader(context.Background())
 			if err != nil {
 				m.logger.Info("get leader failed", zap.Error(err))
@@ -109,7 +226,6 @@ func (m *Master) campaign() {
 	}
 }
 
-// 是否为leader
 func (m *Master) isLeader() bool {
 	return atomic.LoadInt32(&m.ready) != 0
 }
@@ -141,34 +257,235 @@ func (m *Master) watchWorker() chan *registry.Result {
 	return ch
 }
 
-func (m *Master) selectedForLeader() {
+// 当Master成为leader之后，要全量获取一次etcd中的最新资源信息，并把他保存到内存中
+func (m *Master) selectedForLeader() error {
+
+	// 更新当前的worker节点
+	m.updateWorkerNodes()
+
+	// 全量加载爬虫资源
+	if err := m.loadResource(); err != nil {
+		return fmt.Errorf("loadResource failed:%w", err)
+	}
+
+	// 重新分配资源
+	m.reAssign()
+
 	atomic.StoreInt32(&m.ready, 1)
+	return nil
 }
 
-func (m *Master) updateNodes() {
+func (m *Master) updateWorkerNodes() {
+
 	services, err := m.registry.GetService(worker.ServiceName)
 	if err != nil {
 		m.logger.Error("get service", zap.Error(err))
 	}
 
-	nodes := make(map[string]*registry.Node)
+	nodes := make(map[string]*NodeSpec)
 	if len(services) > 0 {
 		for _, spec := range services[0].Nodes {
-			nodes[spec.Id] = spec
+			nodes[spec.Id] = &NodeSpec{Node: spec}
 		}
 	}
 
 	added, deleted, changed := workerNodeDiff(m.workerNodes, nodes)
-	m.logger.Sugar().Info("worker joined: ", added, ", deleted: ", deleted, ", changed: ", changed)
+	m.logger.Sugar().Info("worker joined: ", added, ", leaved: ", deleted, ", changed: ", changed)
 
 	m.workerNodes = nodes
 }
 
-func workerNodeDiff(old map[string]*registry.Node, new map[string]*registry.Node) ([]string, []string, []string) {
+func (m *Master) addSeed() {
+
+	rs := make([]*ResourceSpec, 0, len(m.Seeds))
+
+	for _, seed := range m.Seeds {
+		resp, err := m.etcdCli.Get(context.Background(), getResourcePath(seed.Name), clientv3.WithSerializable())
+		if err != nil {
+			m.logger.Error("etcd get failed", zap.Error(err))
+			continue
+		}
+
+		if len(resp.Kvs) == 0 {
+			r := &ResourceSpec{Name: seed.Name}
+			rs = append(rs, r)
+		}
+	}
+
+	m.AddResources(rs)
+}
+
+func getResourcePath(name string) string {
+	return fmt.Sprintf("%s/%s", RESOURCE_PATH, name)
+}
+
+func (m *Master) handleMessages() {
+
+	msgCh := make(chan *Message)
+
+	select {
+	case msg := <-msgCh:
+		switch msg.Cmd {
+		case MSGADD:
+			m.AddResources(msg.Specs)
+		}
+	}
+}
+
+func (m *Master) AddResources(rs []*ResourceSpec) {
+	for _, r := range rs {
+		m.addResource(r)
+	}
+}
+
+func (m *Master) addResource(r *ResourceSpec) (*NodeSpec, error) {
+
+	// 使用snowflake算法，生成一个单调递增的分布式id
+	r.Id = m.IdGen.Generate().String()
+
+	ns, err := m.assign(r)
+	if err != nil {
+		m.logger.Error("assign failed", zap.Error(err))
+		return nil, err
+	}
+
+	if ns.Node == nil {
+		m.logger.Error("no node to assign")
+		return nil, err
+	}
+
+	r.AssignedNode = ns.Node.Id + "|" + ns.Node.Address
+	r.CreatedTime = time.Now().UnixNano()
+	m.logger.Debug("add resource", zap.Any("specs", r))
+
+	_, err = m.etcdCli.Put(context.Background(), getResourcePath(r.Name), encode(r))
+	if err != nil {
+		m.logger.Error("put etcd failed", zap.Error(err))
+		return nil, err
+	}
+
+	m.resources[r.Name] = r
+
+	// 当前节点负载递增
+	ns.Payload++
+
+	return ns, nil
+
+}
+
+func encode(r *ResourceSpec) string {
+	b, _ := json.Marshal(r)
+	return string(b)
+}
+
+func decode(ds []byte) (*ResourceSpec, error) {
+	var r *ResourceSpec
+	err := json.Unmarshal(ds, &r)
+	return r, err
+}
+
+// 给worker分配任务
+func (m *Master) assign(r *ResourceSpec) (*NodeSpec, error) {
+
+	// 候选人
+	candidates := make([]*NodeSpec, 0, len(m.workerNodes))
+
+	for _, node := range m.workerNodes {
+		candidates = append(candidates, node)
+	}
+
+	// 找到最低负载
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].Payload < candidates[j].Payload
+	})
+
+	if len(candidates) > 0 {
+		return candidates[0], nil
+	}
+	return nil, errors.New("no worker nodes")
+}
+
+// 全量加载当前的爬虫资源
+func (m *Master) loadResource() error {
+
+	resp, err := m.etcdCli.Get(context.Background(), RESOURCE_PATH, clientv3.WithSerializable())
+	if err != nil {
+		return fmt.Errorf("etcd get failed")
+	}
+
+	resources := make(map[string]*ResourceSpec)
+	for _, kv := range resp.Kvs {
+		r, err := decode(kv.Value)
+		if err != nil && r != nil {
+			resources[r.Name] = r
+		}
+	}
+
+	m.logger.Info("leader init load resource", zap.Int("lenth", len(m.resources)))
+	m.resources = resources
+
+	for _, r := range m.resources {
+		if r.AssignedNode != "" {
+			id, err := getNodeId(r.AssignedNode)
+			if err != nil {
+				m.logger.Error("get nodeId failed", zap.Error(err))
+			}
+			if node, ok := m.workerNodes[id]; ok {
+				node.Payload++
+			}
+		}
+	}
+	return nil
+}
+
+/*
+当资源还没有分配worker节点时，再次尝试将资源分配到Worker节点
+如果资源都分配给了Worker节点，查看当前节点是否存活，如果当前节点已经不存在了，就将该资源分配给其他的节点
+
+分配资源的时机：
+1. Master成为Leader
+2. 客户端调用Master API进行资源的增删改查
+3. Master监听到Worker节点发生变化
+*/
+func (m *Master) reAssign() {
+
+	rs := make([]*ResourceSpec, 0, len(m.resources))
+
+	for _, r := range m.resources {
+		if r.AssignedNode == "" {
+			rs = append(rs, r)
+			continue
+		}
+
+		id, err := getNodeId(r.AssignedNode)
+		if err != nil {
+			m.logger.Error("get nodeId failed", zap.Error(err))
+		}
+
+		if _, ok := m.workerNodes[id]; !ok {
+			rs = append(rs, r)
+		}
+	}
+	m.AddResources(rs)
+
+}
+
+func getNodeId(node string) (string, error) {
+
+	nds := strings.Split(node, "|")
+	if len(nds) < 2 {
+		return "", errors.New("get nodeId error")
+	}
+	id := nds[0]
+	return id, nil
+}
+
+func workerNodeDiff(old map[string]*NodeSpec, new map[string]*NodeSpec) ([]string, []string, []string) {
 
 	added := make([]string, 0)
 	deleted := make([]string, 0)
 	changed := make([]string, 0)
+
 	for k, v := range new {
 		if ov, ok := old[k]; ok {
 			if !reflect.DeepEqual(v, ov) {

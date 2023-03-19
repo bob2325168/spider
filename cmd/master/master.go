@@ -2,11 +2,14 @@ package master
 
 import (
 	"context"
-	"github.com/bob2325168/spider/master"
-	"github.com/bob2325168/spider/middlewares/limiter"
-	"github.com/bob2325168/spider/middlewares/logger"
-	gt "github.com/bob2325168/spider/proto/greeter"
+	"github.com/bob2325168/spider/cmd/worker"
+	"github.com/bob2325168/spider/proto/crawler"
 	"github.com/bob2325168/spider/spider"
+	"net/http"
+	"time"
+
+	"github.com/bob2325168/spider/master"
+	"github.com/bob2325168/spider/middlewares/logger"
 	"github.com/go-micro/plugins/v4/config/encoder/toml"
 	"github.com/go-micro/plugins/v4/registry/etcd"
 	gs "github.com/go-micro/plugins/v4/server/grpc"
@@ -23,21 +26,20 @@ import (
 	"go-micro.dev/v4/server"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"net/http"
-	"time"
 )
 
 var masterId string
 var HTTPListenAddress string
 var GRPCListenAddress string
+var PProfListenAddress string
 
 func init() {
 	Cmd.Flags().StringVar(&masterId, "id", "1", "set master id")
 	Cmd.Flags().StringVar(&HTTPListenAddress, "http", ":8081", "set HTTP listen address")
 	Cmd.Flags().StringVar(&GRPCListenAddress, "grpc", ":9091", "set GRPC listen address")
+	Cmd.Flags().StringVar(&PProfListenAddress, "pprof", ":9981", "set pprof listen address")
 }
 
 var Cmd = &cobra.Command{
@@ -51,6 +53,13 @@ var Cmd = &cobra.Command{
 }
 
 func run() {
+
+	//// start pprof
+	//go func() {
+	//	if err := http.ListenAndServe(PProfListenAddress, nil); err != nil {
+	//		panic(err)
+	//	}
+	//}()
 
 	var (
 		err      error
@@ -86,20 +95,34 @@ func run() {
 	}
 	log.Sugar().Debugf("master grpc server config, %+v", sConfig)
 
+	// 注册etcd的配置中心
 	reg := etcd.NewRegistry(registry.Addrs(sConfig.RegistryAddress))
-	master.New(
+
+	// 初始化任务task
+	var tcfg []spider.TaskConfig
+	if err := cfg.Get("Tasks").Scan(&tcfg); err != nil {
+		log.Error("init seed tasks", zap.Error(err))
+	}
+
+	seeds := worker.ParseTaskConfig(log, nil, nil, tcfg)
+
+	m, err := master.New(
 		masterId,
 		master.WithLogger(log.Named("master")),
 		master.WithGRPCAddress(GRPCListenAddress),
 		master.WithregistryURL(sConfig.RegistryAddress),
 		master.WithRegistry(reg),
+		master.WithSeeds(seeds),
 	)
+	if err != nil {
+		log.Error("init master failed", zap.Error(err))
+	}
 
 	// 启动http proxy to grpc
 	go runHTTPServer(sConfig)
 
 	// 启动grpc服务器
-	runGRPCServer(log, reg, sConfig)
+	runGRPCServer(m, log, reg, sConfig)
 }
 
 type ServerConfig struct {
@@ -110,7 +133,7 @@ type ServerConfig struct {
 	ClientTimeOut    int
 }
 
-func runGRPCServer(logger *zap.Logger, reg registry.Registry, cfg ServerConfig) {
+func runGRPCServer(masterService *master.Master, logger *zap.Logger, reg registry.Registry, cfg ServerConfig) {
 
 	service := micro.NewService(
 		micro.Server(gs.NewServer(server.Id(masterId))),
@@ -127,10 +150,11 @@ func runGRPCServer(logger *zap.Logger, reg registry.Registry, cfg ServerConfig) 
 		logger.Sugar().Error("micro client init error", zap.String("error:", err.Error()))
 		return
 	}
+
 	service.Init()
 
-	if err := gt.RegisterGreeterHandler(service.Server(), new(Greeter)); err != nil {
-		logger.Fatal("register handler failed")
+	if err := crawler.RegisterCrawlerMasterHandler(service.Server(), masterService); err != nil {
+		logger.Fatal("register handler failed", zap.Error(err))
 	}
 
 	//启动GRPC服务
@@ -140,6 +164,7 @@ func runGRPCServer(logger *zap.Logger, reg registry.Registry, cfg ServerConfig) 
 }
 
 func runHTTPServer(cfg ServerConfig) {
+
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -149,7 +174,7 @@ func runHTTPServer(cfg ServerConfig) {
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	}
 
-	if err := gt.RegisterGreeterGwFromEndpoint(ctx, mux, GRPCListenAddress, opts); err != nil {
+	if err := crawler.RegisterCrawlerMasterGwFromEndpoint(ctx, mux, GRPCListenAddress, opts); err != nil {
 		zap.L().Fatal("register backend grpc server endpoint failed")
 	}
 	zap.S().Debugf("start http server listening on %v proxy to grpc server;%v", HTTPListenAddress, GRPCListenAddress)
@@ -174,53 +199,4 @@ func logWrapper(log *zap.Logger) server.HandlerWrapper {
 			return err
 		}
 	}
-}
-
-// 从配置文件中读取值
-func parseTaskConfig(log *zap.Logger, f spider.Fetcher,
-	s spider.Storage, cfgs []spider.TaskConfig) []*spider.Task {
-
-	tasks := make([]*spider.Task, 0, 1000)
-	for _, cfg := range cfgs {
-		t := spider.NewTask(
-			spider.WithName(cfg.Name),
-			spider.WithReload(cfg.Reload),
-			spider.WithCookie(cfg.Cookie),
-			spider.WithLogger(log),
-			spider.WithStorage(s),
-		)
-
-		if cfg.WaitTime > 0 {
-			t.WaitTime = cfg.WaitTime
-		}
-		if cfg.MaxDepth > 0 {
-			t.MaxDepth = cfg.MaxDepth
-		}
-
-		var limits []limiter.RateLimiter
-		if len(cfg.Limits) > 0 {
-			for _, lcfg := range cfg.Limits {
-				l := rate.NewLimiter(limiter.Per(lcfg.EventCount, time.Duration(lcfg.EventDur)*time.Second), 1)
-				limits = append(limits, l)
-			}
-			multiLimitter := limiter.Multi(limits...)
-			t.Limiter = multiLimitter
-		}
-
-		switch cfg.Fetcher {
-		case "browser":
-			t.Fetcher = f
-		}
-		tasks = append(tasks, t)
-	}
-	return tasks
-}
-
-// Greeter 实现 GRPC greeter interface
-type Greeter struct {
-}
-
-func (g Greeter) Hello(ctx context.Context, request *gt.Request, response *gt.Response) error {
-	response.Greeting = "Hello" + request.Name
-	return nil
 }
