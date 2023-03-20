@@ -10,6 +10,7 @@ import (
 	"github.com/go-acme/lego/v4/log"
 	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/pkg/errors"
+	"go-micro.dev/v4/client"
 	"go-micro.dev/v4/registry"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -18,6 +19,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -41,6 +43,9 @@ type Master struct {
 	resources   map[string]*ResourceSpec
 	IdGen       *snowflake.Node
 	etcdCli     *clientv3.Client
+	farwardCli  proto.CrawlerMasterService
+
+	rLock sync.Mutex
 
 	options
 }
@@ -116,12 +121,37 @@ func New(id string, opts ...Option) (*Master, error) {
 */
 func (m *Master) AddResource(ctx context.Context, req *proto.ResourceSpec, resp *proto.NodeSpec) error {
 
+	// 如果不是leader，就获取leader的地址，完成转发请求
+	//  不指定leader的地址，随机转发
+	if !m.isLeader() && m.leaderId != "" && m.leaderId != m.Id {
+		addr := getLeaderAddress(m.leaderId)
+		nodeSpec, err := m.farwardCli.AddResource(ctx, req, client.WithAddress(addr))
+		if nodeSpec != nil {
+			resp.Id = nodeSpec.Id
+			resp.Address = nodeSpec.Address
+		}
+		return err
+	}
+
+	// 如果是leader，就直接处理请求
+	m.rLock.Lock()
+	defer m.rLock.Unlock()
+
 	nodeSpec, err := m.addResource(&ResourceSpec{Name: req.Name})
 	if nodeSpec != nil {
 		resp.Id = nodeSpec.Node.Id
 		resp.Address = nodeSpec.Node.Address
 	}
 	return err
+}
+
+func getLeaderAddress(leaderId string) string {
+
+	s := strings.Split(leaderId, "-")
+	if len(s) < 2 {
+		return ""
+	}
+	return s[1]
 }
 
 func (m *Master) DeleteResource(ctx context.Context, spec *proto.ResourceSpec, empty *empty.Empty) error {
@@ -468,6 +498,10 @@ func (m *Master) reAssign() {
 	}
 	m.AddResources(rs)
 
+}
+
+func (m *Master) SetForwardClient(cli proto.CrawlerMasterService) {
+	m.farwardCli = cli
 }
 
 func getNodeId(node string) (string, error) {

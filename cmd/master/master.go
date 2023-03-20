@@ -10,6 +10,7 @@ import (
 
 	"github.com/bob2325168/spider/master"
 	"github.com/bob2325168/spider/middlewares/logger"
+	grpccli "github.com/go-micro/plugins/v4/client/grpc"
 	"github.com/go-micro/plugins/v4/config/encoder/toml"
 	"github.com/go-micro/plugins/v4/registry/etcd"
 	gs "github.com/go-micro/plugins/v4/server/grpc"
@@ -143,7 +144,11 @@ func runGRPCServer(masterService *master.Master, logger *zap.Logger, reg registr
 		micro.RegisterInterval(time.Duration(cfg.RegisterInterval)*time.Second),
 		micro.Name(cfg.Name),
 		micro.WrapHandler(logWrapper(logger)),
+		micro.Client(grpccli.NewClient()),
 	)
+
+	cli := crawler.NewCrawlerMasterService(cfg.Name, service.Client())
+	masterService.SetForwardClient(cli)
 
 	//设置micro客户端默认超时时间
 	if err := service.Client().Init(client.RequestTimeout(time.Duration(cfg.ClientTimeOut) * time.Second)); err != nil {
