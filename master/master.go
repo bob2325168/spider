@@ -156,6 +156,16 @@ func getLeaderAddress(leaderId string) string {
 
 func (m *Master) DeleteResource(ctx context.Context, spec *proto.ResourceSpec, empty *empty.Empty) error {
 
+	if !m.isLeader() && m.leaderId != "" && m.leaderId != m.Id {
+		addr := getLeaderAddress(m.leaderId)
+		_, err := m.farwardCli.DeleteResource(ctx, spec, client.WithAddress(addr))
+		return err
+	}
+
+	m.rLock.Lock()
+	defer m.rLock.Unlock()
+
+	// 查找资源是否已经存在
 	r, ok := m.resources[spec.Name]
 	if !ok {
 		return errors.New("no such task")
@@ -165,7 +175,11 @@ func (m *Master) DeleteResource(ctx context.Context, spec *proto.ResourceSpec, e
 		return err
 	}
 
+	// 删除资源
+	delete(m.resources, spec.Name)
+
 	if r.AssignedNode != "" {
+
 		nodeId, err := getNodeId(r.AssignedNode)
 		if err != nil {
 			return err
@@ -312,6 +326,9 @@ func (m *Master) updateWorkerNodes() {
 		m.logger.Error("get service", zap.Error(err))
 	}
 
+	m.rLock.Lock()
+	defer m.rLock.Unlock()
+
 	nodes := make(map[string]*NodeSpec)
 	if len(services) > 0 {
 		for _, spec := range services[0].Nodes {
@@ -452,6 +469,10 @@ func (m *Master) loadResource() error {
 	}
 
 	m.logger.Info("leader init load resource", zap.Int("lenth", len(m.resources)))
+
+	m.rLock.Lock()
+	defer m.rLock.Unlock()
+
 	m.resources = resources
 
 	for _, r := range m.resources {
@@ -481,6 +502,9 @@ func (m *Master) reAssign() {
 
 	rs := make([]*ResourceSpec, 0, len(m.resources))
 
+	m.rLock.Lock()
+	defer m.rLock.Unlock()
+
 	for _, r := range m.resources {
 		if r.AssignedNode == "" {
 			rs = append(rs, r)
@@ -497,7 +521,6 @@ func (m *Master) reAssign() {
 		}
 	}
 	m.AddResources(rs)
-
 }
 
 func (m *Master) SetForwardClient(cli proto.CrawlerMasterService) {
