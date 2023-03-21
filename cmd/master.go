@@ -30,12 +30,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-var masterId string
-
-//var HTTPListenAddress string
-//var GRPCListenAddress string
-//var PProfListenAddress string
-
 func init() {
 	MasterCmd.Flags().StringVar(&masterId, "id", "1", "set master id")
 	MasterCmd.Flags().StringVar(&HTTPListenAddress, "http", ":8081", "set HTTP listen address")
@@ -55,12 +49,12 @@ var MasterCmd = &cobra.Command{
 
 func runMaster() {
 
-	//// start pprof
-	//go func() {
-	//	if err := http.ListenAndServe(PProfListenAddress, nil); err != nil {
-	//		panic(err)
-	//	}
-	//}()
+	// start pprof
+	go func() {
+		if err := http.ListenAndServe(PProfListenAddress, nil); err != nil {
+			panic(err)
+		}
+	}()
 
 	var (
 		err      error
@@ -105,7 +99,7 @@ func runMaster() {
 		log.Error("init seed tasks", zap.Error(err))
 	}
 
-	seeds := ParseTaskConfig(log, nil, nil, tcfg)
+	seeds := parseTaskConfig(log, nil, nil, tcfg)
 
 	m, err := master.New(
 		masterId,
@@ -126,15 +120,7 @@ func runMaster() {
 	runMasterGRPCServer(m, log, reg, sConfig)
 }
 
-//type ServerConfig struct {
-//	RegistryAddress  string
-//	RegisterTTL      int
-//	RegisterInterval int
-//	Name             string
-//	ClientTimeOut    int
-//}
-
-func runMasterGRPCServer(masterService *master.Master, logger *zap.Logger, reg registry.Registry, cfg ServerConfig) {
+func runMasterGRPCServer(masterService *master.Master, log *zap.Logger, reg registry.Registry, cfg ServerConfig) {
 
 	service := micro.NewService(
 		micro.Server(gs.NewServer(server.Id(masterId))),
@@ -143,7 +129,7 @@ func runMasterGRPCServer(masterService *master.Master, logger *zap.Logger, reg r
 		micro.RegisterTTL(time.Duration(cfg.RegisterTTL)*time.Second),
 		micro.RegisterInterval(time.Duration(cfg.RegisterInterval)*time.Second),
 		micro.Name(cfg.Name),
-		micro.WrapHandler(logWrapper(logger)),
+		micro.WrapHandler(logger.LogWrapper(log)),
 		micro.Client(grpccli.NewClient()),
 	)
 
@@ -152,19 +138,19 @@ func runMasterGRPCServer(masterService *master.Master, logger *zap.Logger, reg r
 
 	//设置micro客户端默认超时时间
 	if err := service.Client().Init(client.RequestTimeout(time.Duration(cfg.ClientTimeOut) * time.Second)); err != nil {
-		logger.Sugar().Error("micro client init error", zap.String("error:", err.Error()))
+		log.Sugar().Error("micro client init error", zap.String("error:", err.Error()))
 		return
 	}
 
 	service.Init()
 
 	if err := crawler.RegisterCrawlerMasterHandler(service.Server(), masterService); err != nil {
-		logger.Fatal("register handler failed", zap.Error(err))
+		log.Fatal("register handler failed", zap.Error(err))
 	}
 
 	//启动GRPC服务
 	if err := service.Run(); err != nil {
-		logger.Fatal("master grpc server stop")
+		log.Fatal("master grpc server stop")
 	}
 }
 
@@ -189,20 +175,3 @@ func runMasterHTTPServer(cfg ServerConfig) {
 		zap.L().Fatal("http listenAndServe failed")
 	}
 }
-
-//
-//// 使用go函数闭包的特性，对请求进行封装
-//// 中间件函数在接收到GRPC请求时，可以打印出请求的具体参数，方便排查问题
-//func logWrapper(log *zap.Logger) server.HandlerWrapper {
-//	return func(fn server.HandlerFunc) server.HandlerFunc {
-//		return func(ctx context.Context, req server.Request, rsp interface{}) error {
-//			log.Info("receive request",
-//				zap.String("method", req.Method()),
-//				zap.String("service", req.Service()),
-//				zap.Reflect("request param:", req.Body()),
-//			)
-//			err := fn(ctx, req, rsp)
-//			return err
-//		}
-//	}
-//}

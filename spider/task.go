@@ -13,6 +13,8 @@ type Task struct {
 	Visited     map[string]bool //是否爬过该网站
 	VisitedLock sync.Mutex
 	Rule        RuleTree
+	Closed      bool // 用于标识任务已经删除
+
 	Options
 }
 

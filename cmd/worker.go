@@ -34,13 +34,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-var ServiceName = "go.micro.server.worker"
-var workerId string
-var HTTPListenAddress string
-var GRPCListenAddress string
-var PProfListenAddress string
-var cluster bool
-
 func init() {
 	WorkerCmd.Flags().StringVar(&workerId, "id", "1", "set master id")
 	WorkerCmd.Flags().StringVar(&HTTPListenAddress, "http", ":8080", "set HTTP listen address")
@@ -129,7 +122,7 @@ func runWorker() {
 		log.Error("init seed tasks", zap.Error(err))
 	}
 
-	seeds := ParseTaskConfig(log, f, store, tCfg)
+	seeds := parseTaskConfig(log, f, store, tCfg)
 
 	var sConfig ServerConfig
 	if err := cfg.Get("WorkerServer").Scan(&sConfig); err != nil {
@@ -163,14 +156,6 @@ func runWorker() {
 	runWorkerGRPCServer(log, sConfig)
 }
 
-type ServerConfig struct {
-	RegistryAddress  string
-	RegisterTTL      int
-	RegisterInterval int
-	Name             string
-	ClientTimeOut    int
-}
-
 func runWorkerGRPCServer(log *zap.Logger, cfg ServerConfig) {
 
 	reg := etcd.NewRegistry(registry.Addrs(cfg.RegistryAddress))
@@ -181,7 +166,7 @@ func runWorkerGRPCServer(log *zap.Logger, cfg ServerConfig) {
 		micro.RegisterTTL(time.Duration(cfg.RegisterTTL)*time.Second),
 		micro.RegisterInterval(time.Duration(cfg.RegisterInterval)*time.Second),
 		micro.Name(cfg.Name),
-		micro.WrapHandler(logWrapper(log)),
+		micro.WrapHandler(logger.LogWrapper(log)),
 	)
 
 	// 设置micro客户端默认超时时间
@@ -226,24 +211,8 @@ func runWorkerHTTPServer(cfg ServerConfig) {
 	}
 }
 
-// 使用go函数闭包的特性，对请求进行封装
-// 中间件函数在接收到GRPC请求时，可以打印出请求的具体参数，方便排查问题
-func logWrapper(log *zap.Logger) server.HandlerWrapper {
-	return func(fn server.HandlerFunc) server.HandlerFunc {
-		return func(ctx context.Context, req server.Request, rsp interface{}) error {
-			log.Info("receive request",
-				zap.String("method", req.Method()),
-				zap.String("service", req.Service()),
-				zap.Reflect("request param:", req.Body()),
-			)
-			err := fn(ctx, req, rsp)
-			return err
-		}
-	}
-}
-
 // 从配置文件中读取值
-func ParseTaskConfig(log *zap.Logger, f spider.Fetcher,
+func parseTaskConfig(log *zap.Logger, f spider.Fetcher,
 	s spider.Storage, cfgs []spider.TaskConfig) []*spider.Task {
 
 	tasks := make([]*spider.Task, 0, 1000)
