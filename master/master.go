@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/bob2325168/spider/cmd/worker"
 	proto "github.com/bob2325168/spider/proto/crawler"
 	"github.com/bwmarrin/snowflake"
 	"github.com/go-acme/lego/v4/log"
@@ -23,6 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+var serviceName = "go.micro.server.worker"
 
 type Command int
 
@@ -282,7 +283,7 @@ func (m *Master) elect(e *concurrency.Election, ch chan error) {
 
 func (m *Master) watchWorker() chan *registry.Result {
 
-	watch, err := m.registry.Watch(registry.WatchService(worker.ServiceName))
+	watch, err := m.registry.Watch(registry.WatchService(serviceName))
 	if err != nil {
 		panic(err)
 	}
@@ -321,7 +322,7 @@ func (m *Master) selectedForLeader() error {
 
 func (m *Master) updateWorkerNodes() {
 
-	services, err := m.registry.GetService(worker.ServiceName)
+	services, err := m.registry.GetService(serviceName)
 	if err != nil {
 		m.logger.Error("get service", zap.Error(err))
 	}
@@ -425,7 +426,7 @@ func encode(r *ResourceSpec) string {
 	return string(b)
 }
 
-func decode(ds []byte) (*ResourceSpec, error) {
+func Decode(ds []byte) (*ResourceSpec, error) {
 	var r *ResourceSpec
 	err := json.Unmarshal(ds, &r)
 	return r, err
@@ -462,7 +463,7 @@ func (m *Master) loadResource() error {
 
 	resources := make(map[string]*ResourceSpec)
 	for _, kv := range resp.Kvs {
-		r, err := decode(kv.Value)
+		r, err := Decode(kv.Value)
 		if err != nil && r != nil {
 			resources[r.Name] = r
 		}

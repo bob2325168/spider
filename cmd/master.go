@@ -1,8 +1,7 @@
-package master
+package cmd
 
 import (
 	"context"
-	"github.com/bob2325168/spider/cmd/worker"
 	"github.com/bob2325168/spider/proto/crawler"
 	"github.com/bob2325168/spider/spider"
 	"net/http"
@@ -32,28 +31,29 @@ import (
 )
 
 var masterId string
-var HTTPListenAddress string
-var GRPCListenAddress string
-var PProfListenAddress string
+
+//var HTTPListenAddress string
+//var GRPCListenAddress string
+//var PProfListenAddress string
 
 func init() {
-	Cmd.Flags().StringVar(&masterId, "id", "1", "set master id")
-	Cmd.Flags().StringVar(&HTTPListenAddress, "http", ":8081", "set HTTP listen address")
-	Cmd.Flags().StringVar(&GRPCListenAddress, "grpc", ":9091", "set GRPC listen address")
-	Cmd.Flags().StringVar(&PProfListenAddress, "pprof", ":9981", "set pprof listen address")
+	MasterCmd.Flags().StringVar(&masterId, "id", "1", "set master id")
+	MasterCmd.Flags().StringVar(&HTTPListenAddress, "http", ":8081", "set HTTP listen address")
+	MasterCmd.Flags().StringVar(&GRPCListenAddress, "grpc", ":9091", "set GRPC listen address")
+	MasterCmd.Flags().StringVar(&PProfListenAddress, "pprof", ":9981", "set pprof listen address")
 }
 
-var Cmd = &cobra.Command{
+var MasterCmd = &cobra.Command{
 	Use:   "master",
 	Short: "run master service",
 	Long:  "run master service",
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		run()
+		runMaster()
 	},
 }
 
-func run() {
+func runMaster() {
 
 	//// start pprof
 	//go func() {
@@ -105,7 +105,7 @@ func run() {
 		log.Error("init seed tasks", zap.Error(err))
 	}
 
-	seeds := worker.ParseTaskConfig(log, nil, nil, tcfg)
+	seeds := ParseTaskConfig(log, nil, nil, tcfg)
 
 	m, err := master.New(
 		masterId,
@@ -120,21 +120,21 @@ func run() {
 	}
 
 	// 启动http proxy to grpc
-	go runHTTPServer(sConfig)
+	go runMasterHTTPServer(sConfig)
 
 	// 启动grpc服务器
-	runGRPCServer(m, log, reg, sConfig)
+	runMasterGRPCServer(m, log, reg, sConfig)
 }
 
-type ServerConfig struct {
-	RegistryAddress  string
-	RegisterTTL      int
-	RegisterInterval int
-	Name             string
-	ClientTimeOut    int
-}
+//type ServerConfig struct {
+//	RegistryAddress  string
+//	RegisterTTL      int
+//	RegisterInterval int
+//	Name             string
+//	ClientTimeOut    int
+//}
 
-func runGRPCServer(masterService *master.Master, logger *zap.Logger, reg registry.Registry, cfg ServerConfig) {
+func runMasterGRPCServer(masterService *master.Master, logger *zap.Logger, reg registry.Registry, cfg ServerConfig) {
 
 	service := micro.NewService(
 		micro.Server(gs.NewServer(server.Id(masterId))),
@@ -168,7 +168,7 @@ func runGRPCServer(masterService *master.Master, logger *zap.Logger, reg registr
 	}
 }
 
-func runHTTPServer(cfg ServerConfig) {
+func runMasterHTTPServer(cfg ServerConfig) {
 
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
@@ -190,18 +190,19 @@ func runHTTPServer(cfg ServerConfig) {
 	}
 }
 
-// 使用go函数闭包的特性，对请求进行封装
-// 中间件函数在接收到GRPC请求时，可以打印出请求的具体参数，方便排查问题
-func logWrapper(log *zap.Logger) server.HandlerWrapper {
-	return func(fn server.HandlerFunc) server.HandlerFunc {
-		return func(ctx context.Context, req server.Request, rsp interface{}) error {
-			log.Info("receive request",
-				zap.String("method", req.Method()),
-				zap.String("service", req.Service()),
-				zap.Reflect("request param:", req.Body()),
-			)
-			err := fn(ctx, req, rsp)
-			return err
-		}
-	}
-}
+//
+//// 使用go函数闭包的特性，对请求进行封装
+//// 中间件函数在接收到GRPC请求时，可以打印出请求的具体参数，方便排查问题
+//func logWrapper(log *zap.Logger) server.HandlerWrapper {
+//	return func(fn server.HandlerFunc) server.HandlerFunc {
+//		return func(ctx context.Context, req server.Request, rsp interface{}) error {
+//			log.Info("receive request",
+//				zap.String("method", req.Method()),
+//				zap.String("service", req.Service()),
+//				zap.Reflect("request param:", req.Body()),
+//			)
+//			err := fn(ctx, req, rsp)
+//			return err
+//		}
+//	}
+//}

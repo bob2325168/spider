@@ -1,12 +1,12 @@
-package worker
+package cmd
 
 import (
 	"context"
+	"github.com/bob2325168/spider/storage/sqlstorage"
 	"net/http"
 	"time"
 
 	"github.com/bob2325168/spider/collect"
-	sqlstorage2 "github.com/bob2325168/spider/db/storage/sqlstorage"
 	"github.com/bob2325168/spider/engine"
 	"github.com/bob2325168/spider/middlewares/limiter"
 	"github.com/bob2325168/spider/middlewares/logger"
@@ -42,24 +42,24 @@ var PProfListenAddress string
 var cluster bool
 
 func init() {
-	Cmd.Flags().StringVar(&workerId, "id", "1", "set master id")
-	Cmd.Flags().StringVar(&HTTPListenAddress, "http", ":8080", "set HTTP listen address")
-	Cmd.Flags().StringVar(&GRPCListenAddress, "grpc", ":9090", "set GRPC listen address")
-	Cmd.Flags().StringVar(&PProfListenAddress, "pprof", ":9981", "set pprof listen address")
-	Cmd.Flags().BoolVar(&cluster, "cluster", true, "set cluster mode")
+	WorkerCmd.Flags().StringVar(&workerId, "id", "1", "set master id")
+	WorkerCmd.Flags().StringVar(&HTTPListenAddress, "http", ":8080", "set HTTP listen address")
+	WorkerCmd.Flags().StringVar(&GRPCListenAddress, "grpc", ":9090", "set GRPC listen address")
+	WorkerCmd.Flags().StringVar(&PProfListenAddress, "pprof", ":9981", "set pprof listen address")
+	WorkerCmd.Flags().BoolVar(&cluster, "cluster", true, "set cluster mode")
 }
 
-var Cmd = &cobra.Command{
+var WorkerCmd = &cobra.Command{
 	Use:   "worker",
 	Short: "run worker service",
 	Long:  "run worker service",
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		run()
+		runWorker()
 	},
 }
 
-func run() {
+func runWorker() {
 
 	go func() {
 		if err := http.ListenAndServe(PProfListenAddress, nil); err != nil {
@@ -114,10 +114,10 @@ func run() {
 
 	// 设置存储
 	sqlURL := cfg.Get("storage", "sqlURL").String("")
-	if store, err = sqlstorage2.New(
-		sqlstorage2.WithSqlURL(sqlURL),
-		sqlstorage2.WithLogger(log.Named("sqlDB")),
-		sqlstorage2.WithBatchCount(2),
+	if store, err = sqlstorage.New(
+		sqlstorage.WithSqlURL(sqlURL),
+		sqlstorage.WithLogger(log.Named("sqlDB")),
+		sqlstorage.WithBatchCount(2),
 	); err != nil {
 		log.Error("create sqlstorage failed", zap.Error(err))
 		return
@@ -157,10 +157,10 @@ func run() {
 	go c.Run(id, cluster)
 
 	// 启动http proxy to grpc
-	go runHTTPServer(sConfig)
+	go runWorkerHTTPServer(sConfig)
 
 	// 启动grpc服务器
-	runGRPCServer(log, sConfig)
+	runWorkerGRPCServer(log, sConfig)
 }
 
 type ServerConfig struct {
@@ -171,7 +171,7 @@ type ServerConfig struct {
 	ClientTimeOut    int
 }
 
-func runGRPCServer(log *zap.Logger, cfg ServerConfig) {
+func runWorkerGRPCServer(log *zap.Logger, cfg ServerConfig) {
 
 	reg := etcd.NewRegistry(registry.Addrs(cfg.RegistryAddress))
 	service := micro.NewService(
@@ -203,7 +203,7 @@ func runGRPCServer(log *zap.Logger, cfg ServerConfig) {
 
 }
 
-func runHTTPServer(cfg ServerConfig) {
+func runWorkerHTTPServer(cfg ServerConfig) {
 
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)

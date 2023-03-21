@@ -1,10 +1,11 @@
 package engine
 
 import (
+	"github.com/bob2325168/spider/master"
+	"github.com/bob2325168/spider/parse/douban"
+	"github.com/bob2325168/spider/parse/doubangroup"
+	"github.com/bob2325168/spider/parse/doubangroupjs"
 	"github.com/bob2325168/spider/spider"
-	"github.com/bob2325168/spider/task/douban"
-	"github.com/bob2325168/spider/task/doubangroup"
-	"github.com/bob2325168/spider/task/doubangroupjs"
 	"github.com/robertkrimen/otto"
 	clientV3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
@@ -22,6 +23,8 @@ type Crawler struct {
 	out         chan spider.ParseResult
 	Visited     map[string]bool
 	VisitedLock sync.Mutex
+	rLock       sync.Mutex
+	resources   map[string]*master.ResourceSpec
 
 	// 失败请求id ==> 失败请求
 	failures    map[string]*spider.Request
@@ -210,6 +213,8 @@ func (c *Crawler) Run(id string, cluster bool) {
 	if !cluster {
 		c.handleSeeds()
 	}
+	// 加载全量资源
+	//go c.loadResource()
 	go c.Schedule()
 	for i := 0; i < c.WorkCount; i++ {
 		go c.CreateWork()
@@ -422,6 +427,62 @@ func (c *Crawler) handleSeeds() {
 
 	go c.scheduler.Push(reqs...)
 }
+
+//func (c *Crawler) loadResource() error {
+//
+//	resp, err := c.etcdCli.Get(context.Background(), master.RESOURCE_PATH, clientV3.WithPrefix(), clientV3.WithSerializable())
+//	if err != nil {
+//		return fmt.Errorf("etcd get failed")
+//	}
+//
+//	resources := make(map[string]*master.ResourceSpec)
+//	for _, kv := range resp.Kvs {
+//		r, err := master.Decode(kv.Value)
+//		if err == nil && r != nil {
+//			id := getID(r.AssignedNode)
+//			if len(id) > 0 && c.id == id {
+//				resources[r.Name] = r
+//			}
+//		}
+//	}
+//	c.Logger.Info("leader init load resource", zap.Int("lenth", len(resources)))
+//
+//	c.rLock.Lock()
+//	defer c.rLock.Unlock()
+//
+//	c.resources = resources
+//	for _, r := range c.resources {
+//		c.runTasks(r.Name)
+//	}
+//
+//	return nil
+//}
+
+//func (c *Crawler) runTasks(name string) {
+//
+//	t, ok := Store.Hash[name]
+//	if !ok {
+//		c.Logger.Error("can not find preset tasks", zap.String("task name", name))
+//		return
+//	}
+//	res, err := t.Rule.Root()
+//	if err != nil {
+//		c.Logger.Error("get root failed", zap.Error(err))
+//		return
+//	}
+//	for _, r := range res {
+//		r.Task = t
+//	}
+//	go c.scheduler.Push(res...)
+//}
+
+//func getID(node string) string {
+//	s := strings.Split(node, "|")
+//	if len(s) < 2 {
+//		return ""
+//	}
+//	return s[0]
+//}
 
 func GetFields(taskName string, ruleName string) []string {
 	return Store.Hash[taskName].Rule.Trunk[ruleName].ItemFields

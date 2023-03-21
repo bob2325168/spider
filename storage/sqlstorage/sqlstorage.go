@@ -3,16 +3,16 @@ package sqlstorage
 import (
 	"encoding/json"
 	"errors"
-	sqldb2 "github.com/bob2325168/spider/db/sqldb"
 	"github.com/bob2325168/spider/engine"
 	"github.com/bob2325168/spider/spider"
+	"github.com/bob2325168/spider/sqldb"
 	"go.uber.org/zap"
 )
 
 type SqlStore struct {
 	// 缓存输出的结果
 	dataCell []*spider.DataCell
-	db       sqldb2.DBer
+	db       sqldb.DBer
 	Table    map[string]struct{}
 
 	options
@@ -30,9 +30,9 @@ func New(opts ...Option) (*SqlStore, error) {
 	s.Table = make(map[string]struct{})
 
 	var err error
-	s.db, err = sqldb2.New(
-		sqldb2.WithLogger(s.logger),
-		sqldb2.WithConnUrl(s.sqlURL),
+	s.db, err = sqldb.New(
+		sqldb.WithLogger(s.logger),
+		sqldb.WithConnUrl(s.sqlURL),
 	)
 	if err != nil {
 		return nil, err
@@ -47,7 +47,7 @@ func (s *SqlStore) Save(dataCells ...*spider.DataCell) error {
 		if _, ok := s.Table[tableName]; !ok {
 			//创建表
 			columnNames := getFields(cell)
-			err := s.db.CreateTable(sqldb2.TableData{
+			err := s.db.CreateTable(sqldb.TableData{
 				TableName:   tableName,
 				ColumnNames: columnNames,
 				AutoKey:     true,
@@ -68,22 +68,22 @@ func (s *SqlStore) Save(dataCells ...*spider.DataCell) error {
 	return nil
 }
 
-func getFields(cell *spider.DataCell) []sqldb2.Field {
+func getFields(cell *spider.DataCell) []sqldb.Field {
 
 	taskName := cell.Data["Task"].(string)
 	ruleName := cell.Data["Rule"].(string)
 	fields := engine.GetFields(taskName, ruleName)
 
-	var columnNames []sqldb2.Field
+	var columnNames []sqldb.Field
 	for _, field := range fields {
-		columnNames = append(columnNames, sqldb2.Field{
+		columnNames = append(columnNames, sqldb.Field{
 			Title: field,
 			Type:  "MEDIUMTEXT",
 		})
 	}
 	columnNames = append(columnNames,
-		sqldb2.Field{Title: "URL", Type: "VARCHAR(255)"},
-		sqldb2.Field{Title: "Time", Type: "VARCHAR(255)"},
+		sqldb.Field{Title: "URL", Type: "VARCHAR(255)"},
+		sqldb.Field{Title: "Time", Type: "VARCHAR(255)"},
 	)
 	return columnNames
 }
@@ -138,7 +138,7 @@ func (s *SqlStore) Flush() error {
 		}
 	}
 
-	return s.db.Insert(sqldb2.TableData{
+	return s.db.Insert(sqldb.TableData{
 		TableName:   s.dataCell[0].GetTableName(),
 		ColumnNames: getFields(s.dataCell[0]),
 		Args:        args,

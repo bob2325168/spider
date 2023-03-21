@@ -1,7 +1,8 @@
-package version
+package cmd
 
 import (
 	"fmt"
+	"github.com/spf13/cobra"
 )
 
 // Version information.
@@ -11,6 +12,16 @@ var (
 	GitBranch = "None"
 	Version   = "None"
 )
+
+var VersionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "print version",
+	Long:  "print version",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		Printer()
+	},
+}
 
 func GetVersion() string {
 	if GitHash != "" {

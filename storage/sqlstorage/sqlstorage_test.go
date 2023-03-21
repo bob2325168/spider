@@ -1,12 +1,12 @@
 package sqlstorage
 
 import (
-	"github.com/bob2325168/spider/db/sqldb"
 	"github.com/bob2325168/spider/engine"
+	"github.com/bob2325168/spider/parse/douban"
+	"github.com/bob2325168/spider/parse/doubangroup"
+	"github.com/bob2325168/spider/parse/doubangroupjs"
 	"github.com/bob2325168/spider/spider"
-	"github.com/bob2325168/spider/task/douban"
-	"github.com/bob2325168/spider/task/doubangroup"
-	"github.com/bob2325168/spider/task/doubangroupjs"
+	"github.com/bob2325168/spider/sqldb"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )
