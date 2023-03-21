@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/bob2325168/spider/proto/crawler"
 	"github.com/bob2325168/spider/spider"
+	"github.com/juju/ratelimit"
 	"net/http"
 	"time"
 
@@ -13,6 +14,8 @@ import (
 	"github.com/go-micro/plugins/v4/config/encoder/toml"
 	"github.com/go-micro/plugins/v4/registry/etcd"
 	gs "github.com/go-micro/plugins/v4/server/grpc"
+	"github.com/go-micro/plugins/v4/wrapper/breaker/hystrix"
+	ratePlugin "github.com/go-micro/plugins/v4/wrapper/ratelimiter/ratelimit"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/spf13/cobra"
 	"go-micro.dev/v4"
@@ -122,6 +125,9 @@ func runMaster() {
 
 func runMasterGRPCServer(masterService *master.Master, log *zap.Logger, reg registry.Registry, cfg ServerConfig) {
 
+	// 令牌桶算法限流：每秒放0.5个令牌
+	b := ratelimit.NewBucketWithRate(0.5, 1)
+
 	service := micro.NewService(
 		micro.Server(gs.NewServer(server.Id(masterId))),
 		micro.Address(GRPCListenAddress),
@@ -131,7 +137,20 @@ func runMasterGRPCServer(masterService *master.Master, log *zap.Logger, reg regi
 		micro.Name(cfg.Name),
 		micro.WrapHandler(logger.LogWrapper(log)),
 		micro.Client(grpccli.NewClient()),
+		micro.WrapHandler(ratePlugin.NewHandlerWrapper(b, false)),
+		micro.WrapClient(hystrix.NewClientWrapper()),
 	)
+	//zap.S().Debug("master id:", masterId)
+
+	// 设置熔断器
+	// 熔断的维度是：go.micro.server.master.CrawlerMaster.AddResource, 也就是服务名+方法名
+	hystrix.ConfigureCommand("go.micro.server.master.CrawlerMaster.AddResource", hystrix.CommandConfig{
+		Timeout:                10000, // 超时时间
+		MaxConcurrentRequests:  100,   // 最大并发数
+		ErrorPercentThreshold:  30,    // 错误百分比，超过这个值就触发熔断
+		RequestVolumeThreshold: 10,    // 触发熔断器的最小请求数
+		SleepWindow:            30,    // 熔断后多久尝试恢复
+	})
 
 	cli := crawler.NewCrawlerMasterService(cfg.Name, service.Client())
 	masterService.SetForwardClient(cli)
