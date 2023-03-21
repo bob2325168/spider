@@ -39,12 +39,14 @@ var workerId string
 var HTTPListenAddress string
 var GRPCListenAddress string
 var PProfListenAddress string
+var cluster bool
 
 func init() {
 	Cmd.Flags().StringVar(&workerId, "id", "1", "set master id")
 	Cmd.Flags().StringVar(&HTTPListenAddress, "http", ":8080", "set HTTP listen address")
 	Cmd.Flags().StringVar(&GRPCListenAddress, "grpc", ":9090", "set GRPC listen address")
 	Cmd.Flags().StringVar(&PProfListenAddress, "pprof", ":9981", "set pprof listen address")
+	Cmd.Flags().BoolVar(&cluster, "cluster", true, "set cluster mode")
 }
 
 var Cmd = &cobra.Command{
@@ -59,11 +61,11 @@ var Cmd = &cobra.Command{
 
 func run() {
 
-	//go func() {
-	//	if err := http.ListenAndServe(PProfListenAddress, nil); err != nil {
-	//		panic(err)
-	//	}
-	//}()
+	go func() {
+		if err := http.ListenAndServe(PProfListenAddress, nil); err != nil {
+			panic(err)
+		}
+	}()
 
 	var (
 		err      error
@@ -129,22 +131,30 @@ func run() {
 
 	seeds := ParseTaskConfig(log, f, store, tCfg)
 
-	engine.NewEngine(
-		engine.WithFetcher(f),
-		engine.WithLogger(log),
-		engine.WithWorkCount(5),
-		engine.WithSeeds(seeds),
-		engine.WithScheduler(engine.NewSchedule()),
-	)
-
-	// 启动worker
-	//go s.Run()
-
 	var sConfig ServerConfig
 	if err := cfg.Get("WorkerServer").Scan(&sConfig); err != nil {
 		log.Error("get worker server grpc server config failed", zap.Error(err))
 	}
 	log.Sugar().Debugf("worker server grpc server config, %+v", sConfig)
+
+	c, err := engine.NewEngine(
+		engine.WithFetcher(f),
+		engine.WithLogger(log),
+		engine.WithWorkCount(5),
+		engine.WithSeeds(seeds),
+		engine.WithScheduler(engine.NewSchedule()),
+		engine.WithStorage(store),
+		engine.WithRegistryUrl(sConfig.RegistryAddress),
+	)
+
+	if err != nil {
+		panic(err)
+	}
+
+	id := sConfig.Name + "-" + workerId
+
+	// 启动worker
+	go c.Run(id, cluster)
 
 	// 启动http proxy to grpc
 	go runHTTPServer(sConfig)

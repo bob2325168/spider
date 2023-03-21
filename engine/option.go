@@ -8,10 +8,12 @@ import (
 type Option func(opts *options)
 
 type options struct {
-	WorkCount int
-	Fetcher   spider.Fetcher
-	Logger    *zap.Logger
-	Seeds     []*spider.Task
+	WorkCount   int
+	Fetcher     spider.Fetcher
+	Logger      *zap.Logger
+	Seeds       []*spider.Task
+	Storage     spider.Storage
+	RegistryUrl string
 
 	scheduler Scheduler
 }
@@ -47,5 +49,17 @@ func WithSeeds(seed []*spider.Task) Option {
 func WithScheduler(scheduler Scheduler) Option {
 	return func(opts *options) {
 		opts.scheduler = scheduler
+	}
+}
+
+func WithStorage(s spider.Storage) Option {
+	return func(opts *options) {
+		opts.Storage = s
+	}
+}
+
+func WithRegistryUrl(url string) Option {
+	return func(opts *options) {
+		opts.RegistryUrl = url
 	}
 }

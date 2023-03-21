@@ -6,6 +6,7 @@ import (
 	"github.com/bob2325168/spider/task/doubangroup"
 	"github.com/bob2325168/spider/task/doubangroupjs"
 	"github.com/robertkrimen/otto"
+	clientV3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 	"runtime/debug"
 	"sync"
@@ -17,6 +18,7 @@ var Store = &CrawlerStore{
 }
 
 type Crawler struct {
+	id          string
 	out         chan spider.ParseResult
 	Visited     map[string]bool
 	VisitedLock sync.Mutex
@@ -24,6 +26,8 @@ type Crawler struct {
 	// 失败请求id ==> 失败请求
 	failures    map[string]*spider.Request
 	failureLock sync.Mutex
+
+	etcdCli *clientV3.Client
 
 	options
 }
@@ -159,18 +163,35 @@ func (c *CrawlerStore) AddJsTask(m *spider.TaskModule) {
 	c.list = append(c.list, task)
 }
 
-func NewEngine(opts ...Option) *Crawler {
+func NewEngine(opts ...Option) (*Crawler, error) {
+
 	options := defaultOptions
 	for _, opt := range opts {
 		opt(&options)
 	}
-	e := &Crawler{}
-	e.Visited = make(map[string]bool, 100)
-	e.out = make(chan spider.ParseResult)
-	e.failures = make(map[string]*spider.Request)
-	e.options = options
 
-	return e
+	c := &Crawler{}
+	c.Visited = make(map[string]bool, 100)
+	c.out = make(chan spider.ParseResult)
+	c.failures = make(map[string]*spider.Request)
+	c.options = options
+
+	// 任务加上默认的采集器和存储器
+	for _, task := range Store.list {
+		task.Fetcher = c.Fetcher
+		task.Storage = c.Storage
+
+	}
+
+	endpoints := []string{c.RegistryUrl}
+	cli, err := clientV3.New(clientV3.Config{Endpoints: endpoints})
+	if err != nil {
+		return nil, err
+	}
+
+	c.etcdCli = cli
+
+	return c, nil
 }
 
 func NewSchedule() *Schedule {
@@ -183,7 +204,12 @@ func NewSchedule() *Schedule {
 	return s
 }
 
-func (c *Crawler) Run() {
+func (c *Crawler) Run(id string, cluster bool) {
+
+	c.id = id
+	if !cluster {
+		c.handleSeeds()
+	}
 	go c.Schedule()
 	for i := 0; i < c.WorkCount; i++ {
 		go c.CreateWork()
@@ -369,6 +395,32 @@ func (c *Crawler) HandleFailure(req *spider.Request) {
 		c.failures[req.Unique()] = req
 		c.scheduler.Push(req)
 	}
+}
+
+func (c *Crawler) handleSeeds() {
+
+	var reqs []*spider.Request
+	for _, task := range c.Seeds {
+		t, ok := Store.Hash[task.Name]
+		if !ok {
+			c.Logger.Error("can not find preset tasks", zap.String("task name", task.Name))
+			continue
+		}
+		task.Rule = t.Rule // 任务规则
+		rootReqs, err := task.Rule.Root()
+		if err != nil {
+			c.Logger.Error("get root failed", zap.Error(err))
+			continue
+		}
+
+		for _, req := range rootReqs {
+			req.Task = task
+		}
+
+		reqs = append(reqs, rootReqs...)
+	}
+
+	go c.scheduler.Push(reqs...)
 }
 
 func GetFields(taskName string, ruleName string) []string {
