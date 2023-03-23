@@ -2,10 +2,13 @@ package cmd
 
 import (
 	"context"
+	"fmt"
+	"github.com/bob2325168/spider/generator"
 	"github.com/bob2325168/spider/proto/crawler"
 	"github.com/bob2325168/spider/spider"
 	"github.com/juju/ratelimit"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/bob2325168/spider/master"
@@ -38,6 +41,8 @@ func init() {
 	MasterCmd.Flags().StringVar(&HTTPListenAddress, "http", ":8081", "set HTTP listen address")
 	MasterCmd.Flags().StringVar(&GRPCListenAddress, "grpc", ":9091", "set GRPC listen address")
 	MasterCmd.Flags().StringVar(&PProfListenAddress, "pprof", ":9981", "set pprof listen address")
+	MasterCmd.Flags().StringVar(&podIP, "podip", "", "set pod id")
+	MasterCmd.Flags().StringVar(&cfgFile, "config", "config.toml", "config file")
 }
 
 var MasterCmd = &cobra.Command{
@@ -69,7 +74,7 @@ func runMaster() {
 	enc := toml.NewEncoder()
 	cfg, err := config.NewConfig(config.WithReader(json.NewReader(reader.WithEncoder(enc))))
 	if err := cfg.Load(file.NewSource(
-		file.WithPath("config.toml"),
+		file.WithPath(cfgFile),
 		source.WithEncoder(enc),
 	)); err != nil {
 		panic(err)
@@ -128,6 +133,16 @@ func runMasterGRPCServer(masterService *master.Master, log *zap.Logger, reg regi
 	// 令牌桶算法限流：每秒放0.5个令牌
 	b := ratelimit.NewBucketWithRate(0.5, 1)
 
+	if masterId == "" {
+		if podIP != "" {
+			ip := generator.IdByIP(podIP)
+			masterId = strconv.Itoa(int(ip))
+		} else {
+			masterId = fmt.Sprintf("%d", time.Now().UnixNano())
+		}
+	}
+	zap.S().Debug("master id:", masterId)
+
 	service := micro.NewService(
 		micro.Server(gs.NewServer(server.Id(masterId))),
 		micro.Address(GRPCListenAddress),
@@ -140,7 +155,6 @@ func runMasterGRPCServer(masterService *master.Master, log *zap.Logger, reg regi
 		micro.WrapHandler(ratePlugin.NewHandlerWrapper(b, false)),
 		micro.WrapClient(hystrix.NewClientWrapper()),
 	)
-	//zap.S().Debug("master id:", masterId)
 
 	// 设置熔断器
 	// 熔断的维度是：go.micro.server.master.CrawlerMaster.AddResource, 也就是服务名+方法名

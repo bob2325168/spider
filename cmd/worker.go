@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"context"
+	"fmt"
+	"github.com/bob2325168/spider/generator"
 	"github.com/bob2325168/spider/storage/sqlstorage"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/bob2325168/spider/collect"
@@ -40,6 +43,7 @@ func init() {
 	WorkerCmd.Flags().StringVar(&GRPCListenAddress, "grpc", ":9090", "set GRPC listen address")
 	WorkerCmd.Flags().StringVar(&PProfListenAddress, "pprof", ":9981", "set pprof listen address")
 	WorkerCmd.Flags().BoolVar(&cluster, "cluster", true, "set cluster mode")
+	WorkerCmd.Flags().StringVar(&podIP, "podip", "", "set pod id")
 }
 
 var WorkerCmd = &cobra.Command{
@@ -144,7 +148,17 @@ func runWorker() {
 		panic(err)
 	}
 
+	if workerId == "" {
+		if podIP != "" {
+			ip := generator.IdByIP(podIP)
+			workerId = strconv.Itoa(int(ip))
+		} else {
+			workerId = fmt.Sprintf("%d", time.Now().UnixNano())
+		}
+	}
+
 	id := sConfig.Name + "-" + workerId
+	zap.S().Debug("worker id: ", id)
 
 	// 启动worker
 	go c.Run(id, cluster)

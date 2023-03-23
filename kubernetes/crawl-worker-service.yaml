@@ -8,8 +8,7 @@ spec:
   selector:
     app: crawl-worker
   ports:
-    - port: 8080
-      name: http
-    - port: 9090
-      name: grpc
-
+  - port: 8080
+    name: http
+  - port: 9090
+    name: grpc

@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crawler-deployment
+  labels:
+    app: crawl-worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: crawl-worker
+  template:
+    metadata:
+      labels:
+        app: crawl-worker
+    spec:
+      containers:
+      - name: crawl-worker
+        image: crawler:local
+        command:
+          - sh
+          - -c
+          - "./crawler worker --podip=${MY_POD_IP}"
+        ports:
+        - containerPort: 8080
+        env:
+          - name: MY_POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP

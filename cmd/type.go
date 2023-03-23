@@ -7,6 +7,8 @@ var HTTPListenAddress string
 var GRPCListenAddress string
 var PProfListenAddress string
 var cluster bool
+var podIP string
+var cfgFile string
 
 type ServerConfig struct {
 	RegistryAddress  string
